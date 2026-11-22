@@ -9,6 +9,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     define( 'YS_CACHE_STORAGE_ROOT', getenv( 'YS_CACHE_TEST_STORAGE' ) );
     define( 'MINUTE_IN_SECONDS', 60 );
     define( 'DAY_IN_SECONDS', 86400 );
+    define( 'LSCWP_V', '7.9.2' );
 
     function is_admin() { return false; }
     function is_ssl() { return false; }
@@ -23,6 +24,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     function is_singular() { return false; }
     function add_action( ...$args ) {}
     function add_filter( ...$args ) {}
+    function has_action( ...$args ) { return false; }
     function apply_filters( $name, $value ) {
         if ( $name === 'nonce_life' ) {
             return 2 * ( time() + ( $_SERVER['REQUEST_URI'] === '/nonce-expiring/' ? 2 : 3600 ) );
@@ -59,10 +61,12 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
             if ( str_contains( $query, "setting_name = 'generation'" ) ) {
                 return $this->database()['generation'];
             }
-            $edge = str_starts_with( $this->path, '/edge' );
+            $native = str_starts_with( $this->path, '/native-' );
+            $edge = str_starts_with( $this->path, '/edge' ) || $this->path === '/native-edge/';
             $local = $edge || str_starts_with( $this->path, '/local' ) || str_ends_with( $this->path, '-purge/' );
             return json_encode( [ 'enabled' => true, 'ttl' => 3, 'auto_purge' => $this->path !== '/auto-off-purge/', 'exclude_paths' => '/protected/', 'providers' => [
-                'enhance' => [ 'enabled' => ! $local, 'delegate_html' => ! $local, 'rules_verified' => $this->path !== '/unverified/' ],
+                'enhance' => [ 'enabled' => ! $local && ! $native, 'delegate_html' => ! $local && ! $native, 'rules_verified' => $this->path !== '/unverified/' ],
+                'litespeed' => [ 'enabled' => $native, 'rules_verified' => $this->path !== '/native-unverified/' ],
                 'opcache' => [ 'enabled' => false ],
                 'cdn' => $edge ? [[ 'provider' => 'cloudflare', 'enabled' => true, 'scope' => $this->path === '/edge-static/' ? 'static' : 'html',
                     'html_cache_verified' => $this->path !== '/edge-unverified/' ]] : [],
@@ -87,10 +91,14 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         public function query( string $query ): int { return 0; }
     };
 
-    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
+    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheLiteSpeed', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
         require ABSPATH . 'src/' . $class . '.php';
     }
     $cache = YangSheep\Cache\YSCache::instance();
+    $native = str_starts_with( $path, '/native-' );
+    if ( $native ) {
+        ob_start( [ $cache, 'protectLiteSpeedBody' ] );
+    }
     if ( $_SERVER['REQUEST_METHOD'] === 'POST' && str_ends_with( $path, '-purge/' ) ) {
         header( 'Content-Type: application/json' );
         if ( $path === '/settings-roundtrip-purge/' ) {
@@ -127,7 +135,17 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     if ( $path === '/late-cookie/' ) {
         header( 'Set-Cookie: fixture=private; HttpOnly' );
     }
-    if ( $path === '/guest-token/' ) {
+    if ( $native ) {
+        header( 'X-LiteSpeed-Cache-Control: public,max-age=300,esi=on', true );
+        header( 'X-LiteSpeed-Tag: native-fixture', true );
+    }
+    if ( $path === '/native-late-private/' ) {
+        header( 'Cache-Control: private', true );
+    }
+    if ( $path === '/native-stale-generation/' ) {
+        YangSheep\Cache\Database\YSCacheSettingsRepo::invalidate();
+    }
+    if ( $path === '/guest-token/' || $path === '/native-guest-token/' ) {
         echo '<!doctype html><html><script>example = {"guestToken":"fixture"};</script></html>';
     } else {
         echo '<!doctype html><html><p>fixture</p></html>';
@@ -185,6 +203,16 @@ try {
     }
 
     $before = time();
+    [ , $headers ] = request( $address, '/native-public/' );
+    check( $headers['x-litespeed-cache-control'] ?? '', 'public,max-age=300,esi=on', 'Public guest may use the verified native cache' );
+    foreach ( [ '/native-late-private/', '/native-guest-token/', '/native-unverified/' ] as $path ) {
+        [ , $headers ] = request( $address, $path );
+        check( $headers['x-litespeed-cache-control'] ?? '', 'no-cache,esi=on', 'Reject native caching for ' . $path );
+        check( $headers['cache-control'] ?? '', 'private, no-cache, no-store, must-revalidate', 'Reject edge caching for ' . $path );
+    }
+    [ , $headers ] = request( $address, '/native-edge/' );
+    check( $headers['x-litespeed-cache-control'] ?? '', 'public,max-age=300,esi=on', 'Native header remains public when HTML edge caching is approved' );
+    check( str_contains( $headers['cache-control'] ?? '', 's-maxage=' ), true, 'Native shutdown metadata allows the verified edge to cache public HTML' );
     [ $body, $headers ] = request( $address, '/guest/' );
     check( $body, '<!doctype html><html><p>fixture</p></html>', 'Successful public guest render' );
     check( $headers['x-ys-cache'] ?? '', 'DELEGATED', 'Only safe guest HTML is delegated' );
@@ -252,6 +280,8 @@ try {
     }
     [ $roundtrip ] = request( $address, '/settings-roundtrip-purge/', [], 'POST' );
     check( json_decode( $roundtrip, true ), [ 'saved' => true, 'ttl_seconds' => 61, 'ttl_unit' => 'min', 'auto_purge' => false ], 'Store an exact lifetime, display unit, and master auto purge choice' );
+    [ , $headers ] = request( $address, '/native-stale-generation/' );
+    check( $headers['x-litespeed-cache-control'] ?? '', 'no-cache,esi=on', 'An inflight guest page cannot repopulate native cache after a purge' );
 } catch ( Throwable $error ) {
     fwrite( STDERR, $error->getMessage() . "\n" . (string) @file_get_contents( $log ) );
     $failure = true;

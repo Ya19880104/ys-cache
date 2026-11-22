@@ -6,7 +6,8 @@ namespace YangSheep\Cache {
     final class YSCache {
         public static function settings(): array {
             return [ 'assets' => [ 'css_minify' => true, 'js_minify' => true, 'js_defer' => true,
-                'css_excludes' => "/wp-content/themes/example/styles/skip.css", 'js_excludes' => 'excluded' ] ];
+                'css_excludes' => "/wp-content/themes/example/styles/skip.css", 'js_excludes' => 'excluded',
+                'js_defer_include' => EMPTY_DEFER_LIST ? '' : "example-script\nexcluded\njquery-core\nwith-inline\npreconfigured" ] ];
         }
     }
 
@@ -24,7 +25,7 @@ namespace {
     }
     $core = rtrim( $argv[1] ?? '', "/\\" ) . '/wp-includes/';
     if ( ! is_file( $core . 'html-api/class-wp-html-tag-processor.php' ) ) {
-        fwrite( STDERR, "Usage: php tests/asset-optimization.php /path/to/wordpress [--private]\n" );
+        fwrite( STDERR, "Usage: php tests/asset-optimization.php /path/to/wordpress [--private|--defer-empty]\n" );
         exit( 1 );
     }
     $site = sys_get_temp_dir() . '/ys-cache-assets-test-' . bin2hex( random_bytes( 6 ) );
@@ -36,6 +37,7 @@ namespace {
     define( 'YS_CACHE_VERSION', 'test' );
     define( 'YS_CACHE_DIR', dirname( __DIR__ ) . '/' );
     define( 'PRIVATE_REQUEST', ( $argv[2] ?? '' ) === '--private' );
+    define( 'EMPTY_DEFER_LIST', ( $argv[2] ?? '' ) === '--defer-empty' );
 
     foreach ( [ 'class-wp-token-map.php', 'utf8.php', 'html-api/html5-named-character-references.php',
         'html-api/class-wp-html-span.php', 'html-api/class-wp-html-attribute-token.php',
@@ -101,15 +103,24 @@ namespace {
         verify( ! $defaults['css_minify'] && ! $defaults['js_minify'] && ! $defaults['js_defer'], 'Optimizer is off by default.' );
         verify( Optimizer::sanitize( [ 'js_excludes' => "one\r\n/wp-content/test*.js\none\n<script>" ] )['js_excludes'] ===
             "one\n/wp-content/test*.js", 'Rules normalize literal handles and paths.' );
+        verify( $defaults['js_defer_include'] === '' && Optimizer::sanitize( [
+            'js_defer_include' => "example-script\r\nexample-script\nscript-*\n*\nbundle:part",
+        ] )['js_defer_include'] === "example-script\nbundle:part", 'Defer only accepts exact handles and defaults to no eligible scripts.' );
         Optimizer::register();
         verify( count( $GLOBALS['hooks'] ) === 4, 'Normal head/footer and tag filters are registered.' );
 
         $css = "/*! Copyright Fixture */\n@import 'partials/other.css' screen;\n"
             . str_repeat( "\n  ", 60 ) . '.item :hover { width: calc(100% - 1rem); '
-            . "background: url(../images/bg.png); content: 'url(leave-me.png)'; }\n";
+            . "background: url(../images/bg.png); content: 'url(leave-me.png) var(--literal)'; "
+            . "/*! Keep separator */ --theme /* comment before the colon */ : a , b  ; "
+            . "--wrapped: { foo: 1; bar: 2 }; --quoted: 'keep; url(quoted.png)'; }\n";
         file_put_contents( $styles . '/raw.css', $css );
         file_put_contents( $styles . '/skip.css', $css );
         file_put_contents( $styles . '/complex.css', $css . '.other {background: image-set("foo.png" 1x)}' );
+        file_put_contents( $styles . '/variable-definition.css', $css . ':root { --asset: url("icons/image.png"); }' );
+        file_put_contents( $styles . '/variable-consumer.css', $css . '.component { background-image: var(--asset); }' );
+        file_put_contents( $styles . '/namespace.css', $css . '@namespace svg url("svg-namespace");' );
+        file_put_contents( $styles . '/registered-property.css', $css . '@property --asset { syntax:"<url>"; inherits:false; initial-value:url("icons/image.png"); }' );
         $styleUrl = 'https://example.test/wp-content/themes/example/styles/raw.css?ver=1.2';
         $style = '<link rel="stylesheet" href="' . $styleUrl . '">';
         $optimizedStyle = Optimizer::minifyStyle( $style, 'example-style', $styleUrl );
@@ -120,6 +131,8 @@ namespace {
         }
         preg_match( '~/ys-cache-assets/([a-f0-9]+\.css)~', $optimizedStyle, $output );
         verify( ! empty( $output[1] ), 'Eligible CSS is emitted at its immutable asset URL.' );
+        $legacyHash = hash( 'sha256', 'test|https://example.test/wp-content/themes/example/styles/raw.css|' . $css );
+        verify( $output[1] !== $legacyHash . '.css', 'A safety format change cannot reuse an older asset output.' );
         $directory = WP_CONTENT_DIR . '/uploads/ys-cache-assets';
         $target = $directory . '/' . $output[1];
         $minified = file_get_contents( $target );
@@ -127,8 +140,11 @@ namespace {
             && str_contains( $minified, 'calc(100% - 1rem)' ), 'CSS shrinks without changing selectors or calculated values.' );
         verify( str_contains( $minified, '@import "https://example.test/wp-content/themes/example/styles/partials/other.css"' ) &&
             str_contains( $minified, 'url("https://example.test/wp-content/themes/example/styles/../images/bg.png")' ) &&
-            str_contains( $minified, "content: 'url(leave-me.png)'" ) && str_contains( $minified, 'Copyright Fixture' ),
+            str_contains( $minified, "content: 'url(leave-me.png) var(--literal)'" ) && str_contains( $minified, 'Copyright Fixture' ),
             'CSS imports, relative images, quoted literals, and copyright survive relocation.' );
+        verify( str_contains( $minified, '--theme /* comment before the colon */ : a , b  ;' ) &&
+            str_contains( $minified, '--wrapped: { foo: 1; bar: 2 };' ) && str_contains( $minified, "--quoted: 'keep; url(quoted.png)';" ),
+            'Custom-property values and comments are byte-exact in otherwise simple stylesheets.' );
         $reuse = new ReflectionMethod( Optimizer::class, 'reuse' );
         if ( PHP_VERSION_ID < 80100 ) {
             $reuse->setAccessible( true );
@@ -139,7 +155,8 @@ namespace {
         clearstatcache( true, $target );
         verify( time() - filemtime( $target ) < 10, 'Live reuse refreshes retention before a later prune.' );
 
-        foreach ( [ 'skip.css', 'complex.css', 'raw.css?token=private', 'raw.css?ver=a%26token%3Dprivate' ] as $path ) {
+        foreach ( [ 'skip.css', 'complex.css', 'variable-definition.css', 'variable-consumer.css', 'namespace.css',
+            'registered-property.css', 'raw.css?token=private', 'raw.css?ver=a%26token%3Dprivate' ] as $path ) {
             $url = 'https://example.test/wp-content/themes/example/styles/' . $path;
             $original = '<link rel="stylesheet" href="' . $url . '">';
             verify( Optimizer::minifyStyle( $original, 'example-style', $url ) === $original, 'Unsafe or excluded stylesheet must remain original.' );
@@ -161,7 +178,7 @@ namespace {
                 'JavaScript semantics and copyright are preserved, without copying inline settings.' );
         }
         $GLOBALS['scripts'] = new class( $src ) {
-            public array $queue = [ 'example-script', 'excluded', 'jquery-core', 'with-inline', 'preconfigured' ];
+            public array $queue = [ 'example-script', 'unlisted-raw-inline-consumer', 'excluded', 'jquery-core', 'with-inline', 'preconfigured' ];
             public array $registered = [];
             public array $done = [];
             public function __construct( $src ) {
@@ -173,8 +190,11 @@ namespace {
                 return ( $handle === 'with-inline' && $key === 'after' ) || ( $handle === 'preconfigured' && $key === 'strategy' );
             }
         };
+        $GLOBALS['strategy'] = [];
         Optimizer::deferScripts();
-        verify( $GLOBALS['strategy'] === [ 'example-script' => [ 'strategy', 'defer' ] ], 'Defer leaves critical, excluded, inline, and already configured scripts alone.' );
+        $expected = EMPTY_DEFER_LIST ? [] : [ 'example-script' => [ 'strategy', 'defer' ] ];
+        verify( $GLOBALS['strategy'] === $expected,
+            'Selected eligible handles defer while unlisted, critical, excluded, inline, and already configured scripts remain untouched.' );
         echo "Asset minification, retention, and deferred enqueue checks passed.\n";
     } finally {
         removeTestFiles( $site );

@@ -17,6 +17,10 @@ final class YSCache {
     private ?array $requestPageGenerations = null;
     private bool $externalHold = false;
     private bool $edgeHtml = false;
+    private bool $liteSpeedHtml = false;
+    private bool $liteSpeedCandidate = false;
+    private ?string $liteSpeedNonce = null;
+    private int $liteSpeedExpiry = 0;
     private ?array $pendingSharedHtml = null;
 
     public static function instance(): self {
@@ -35,6 +39,9 @@ final class YSCache {
         add_action( 'template_redirect', [ $this, 'protectPrivateResponse' ], PHP_INT_MAX );
         add_filter( 'template_include', [ $this, 'serveOrCapture' ], PHP_INT_MAX );
         add_filter( 'trp_translated_html', [ $this, 'rewriteTranslatedHtml' ], PHP_INT_MAX, 4 );
+        add_filter( 'litespeed_buffer_before', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
+        add_filter( 'litespeed_buffer_finalize', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
+        add_action( 'litespeed_control_finalize', [ $this, 'limitLiteSpeedTtl' ], PHP_INT_MAX, 0 );
 
         ( new YSCacheInvalidation( [ $this, 'invalidateOnChange' ] ) )->register();
         YSCacheEnhancePurge::register();
@@ -61,7 +68,7 @@ final class YSCache {
             $settings['rocket_migration_id'] = $rocketMigrationId;
         }
 
-        return self::blockingCache() === '' && ( ! self::usesLocalHtml( $settings ) || YSCacheStorage::directory() !== '' ) &&
+        return self::blockingCache( $settings ) === '' && ( ! self::usesLocalHtml( $settings ) || YSCacheStorage::directory() !== '' ) &&
             YSCacheSettingsRepo::invalidate() && YSCacheSettingsRepo::save( $settings );
     }
 
@@ -75,7 +82,7 @@ final class YSCache {
         $before = self::settings();
         $settings = self::sanitize( $input, $before );
         if ( self::usesLocalHtml( $settings ) && ! self::usesLocalHtml( $before ) &&
-            ( self::blockingCache() !== '' || YSCacheStorage::directory() === '' ) ) {
+            ( self::blockingCache( $settings ) !== '' || YSCacheStorage::directory() === '' ) ) {
             return false;
         }
         return YSCacheSettingsRepo::invalidate() && YSCacheSettingsRepo::save( $settings );
@@ -87,7 +94,11 @@ final class YSCache {
     }
 
     public static function usesLocalHtml( array $settings ): bool {
-        return ! empty( $settings['enabled'] ) && ! self::delegatesHtml( $settings );
+        return ! empty( $settings['enabled'] ) && ! self::delegatesHtml( $settings ) && ! self::usesLiteSpeed( $settings );
+    }
+
+    public static function usesLiteSpeed( array $settings ): bool {
+        return ! empty( $settings['providers']['litespeed']['enabled'] );
     }
 
     private static function sanitize( array $input, array $before ): array {
@@ -121,10 +132,14 @@ final class YSCache {
         return trim( preg_replace( '/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/', '', $value ) ?? '' );
     }
 
-    public static function blockingCache(): string {
+    public static function blockingCache( ?array $settings = null ): string {
+        $settings ??= self::settings();
         $active = array_merge( (array) get_option( 'active_plugins', [] ), array_keys( (array) get_site_option( 'active_sitewide_plugins', [] ) ) );
         foreach ( $active as $plugin ) {
             $slug = explode( '/', $plugin, 2 )[0];
+            if ( $slug === 'litespeed-cache' && self::usesLiteSpeed( $settings ) ) {
+                continue;
+            }
             if ( in_array( $slug, [ 'wp-rocket', 'wp-super-cache', 'w3-total-cache', 'litespeed-cache', 'cache-enabler', 'wp-fastest-cache', 'breeze', 'flying-press', 'swift-performance', 'swift-performance-lite', 'siteground-optimizer', 'comet-cache' ], true ) ) {
                 return $slug;
             }
@@ -142,7 +157,8 @@ final class YSCache {
             return;
         }
         // Clear the lower layer first so a refilled origin cannot reuse older HTML.
-        if ( ( self::usesLocalHtml( $settings ) || self::delegatesHtml( $settings ) || self::hasEdgeHtml( $settings ) ) && ! YSCacheSettingsRepo::invalidate() ) {
+        if ( ( self::usesLocalHtml( $settings ) || self::delegatesHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::hasEdgeHtml( $settings ) ) &&
+            ! YSCacheSettingsRepo::invalidate() ) {
             return;
         }
         YSCacheEnhancePurge::onContentChange( $settings );
@@ -154,7 +170,7 @@ final class YSCache {
             // A render that began before a save can never repopulate the new generation.
             if ( self::delegatesHtml( $settings ) ) {
                 $this->requestGeneration = YSCacheSettingsRepo::generation();
-            } elseif ( self::usesLocalHtml( $settings ) || self::hasEdgeHtml( $settings ) ) {
+            } elseif ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::hasEdgeHtml( $settings ) ) {
                 $this->requestPageGenerations = YSCacheSettingsRepo::pageGenerations( (string) ( $_SERVER['REQUEST_URI'] ?? '/' ) );
             }
         }
@@ -187,14 +203,15 @@ final class YSCache {
                 return $results;
             }
         }
-        if ( in_array( $scope, [ 'local', 'all', 'enhance', 'cdn' ], true ) ) {
-            $delegated = self::delegatesHtml( $settings );
+        if ( in_array( $scope, [ 'local', 'all', 'enhance', 'litespeed', 'cdn' ], true ) ) {
+            $nativeOwner = self::usesLiteSpeed( $settings );
+            $delegated = $nativeOwner || self::delegatesHtml( $settings );
             $ok = $delegated && $scope === 'local' ? true : YSCacheSettingsRepo::invalidate();
             $results[] = [
                 'layer'   => 'YS CACHE',
                 'status'  => ! $ok ? 'error' : ( $delegated ? 'skipped' : 'ok' ),
                 'message' => ! $ok ? __( 'The cache generation could not be updated.', 'ys-cache' ) :
-                    ( $delegated ? __( 'Enhance is the HTML cache owner.', 'ys-cache' ) : __( 'HTML cache cleared.', 'ys-cache' ) ),
+                    ( $delegated ? __( 'The server integration manages HTML caching.', 'ys-cache' ) : __( 'HTML cache cleared.', 'ys-cache' ) ),
                 'http'    => 0,
             ];
             if ( ! $ok ) {
@@ -203,7 +220,7 @@ final class YSCache {
         }
         if ( $scope !== 'local' ) {
             $providers['opcache']['enabled'] = false;
-            $providerScope = $scope === 'cdn' && ! empty( $providers['enhance']['enabled'] ) ? 'all' : $scope;
+            $providerScope = $scope === 'cdn' && ( ! empty( $providers['enhance']['enabled'] ) || self::usesLiteSpeed( $settings ) ) ? 'all' : $scope;
             $results = array_merge( $results, YSCacheProviders::purge( $providers, $providerScope ) );
         }
         return $results;
@@ -229,9 +246,9 @@ final class YSCache {
         if ( ! empty( $providers['enhance']['enabled'] ) ) {
             $state = self::delegatesHtml( $settings ) ? true : YSCacheEnhanceIntegration::status( $providers )['enabled'];
             if ( $state !== false ) {
-                $results[] = self::pagePurgeResult( 'Enhance Nginx', 'error', $state === true
-                    ? __( 'Enhance FastCGI supports entire-site purges. Use Purge entire site.', 'ys-cache' )
-                    : __( 'Unable to verify whether Enhance FastCGI is active. CDN purge was paused.', 'ys-cache' ) );
+                $results[] = self::pagePurgeResult( 'YS CLOUD', 'error', $state === true
+                    ? __( 'YS CLOUD uses entire-site purges. Use Purge entire site.', 'ys-cache' )
+                    : __( 'Unable to verify the YS CLOUD origin cache status. CDN purge was paused.', 'ys-cache' ) );
                 return $results;
             }
         }
@@ -287,7 +304,8 @@ final class YSCache {
     public function protectPrivateResponse(): void {
         $settings = self::settings();
         $this->edgeHtml = self::hasEdgeHtml( $settings );
-        if ( ( ! self::usesLocalHtml( $settings ) && ! self::delegatesHtml( $settings ) && ! $this->edgeHtml ) || headers_sent() ) {
+        $this->liteSpeedHtml = self::usesLiteSpeed( $settings );
+        if ( ( ! self::usesLocalHtml( $settings ) && ! self::delegatesHtml( $settings ) && ! $this->edgeHtml && ! $this->liteSpeedHtml ) || headers_sent() ) {
             return;
         }
         if ( self::delegatesHtml( $settings ) && ! in_array( 'X-Accel-Expires: 0', headers_list(), true ) ) {
@@ -300,9 +318,50 @@ final class YSCache {
                 break;
             }
         }
-        // Force shared caches to defer to WordPress for HTML.
-        header( 'Cache-Control: private, no-cache, no-store, must-revalidate', true );
+        if ( ! $this->liteSpeedHtml || $this->edgeHtml || $this->privateResponse ) {
+            // Shared HTML caching needs an explicit eligibility decision.
+            header( 'Cache-Control: private, no-cache, no-store, must-revalidate', true );
+        }
         header( 'X-YS-Cache: BYPASS', true );
+    }
+
+    private function excludeLiteSpeedResponse(): void {
+        if ( $this->liteSpeedHtml ) {
+            $this->liteSpeedCandidate = false;
+            YSCacheLiteSpeed::noCache();
+            if ( ! headers_sent() ) {
+                header( 'Cache-Control: private, no-cache, no-store, must-revalidate', true );
+                if ( defined( 'LSCWP_V' ) ) {
+                    // LiteSpeed may have prepared its native header before the final body filter runs.
+                    $esi = array_filter( headers_list(), static fn ( string $header ): bool =>
+                        stripos( $header, 'X-LiteSpeed-Cache-Control:' ) === 0 && preg_match( '/,\s*esi=on\b/i', $header ) );
+                    header( 'X-LiteSpeed-Cache-Control: no-cache' . ( $esi ? ',esi=on' : '' ), true );
+                }
+            }
+        }
+    }
+
+    public function protectLiteSpeedBody( string $html ): string {
+        if ( ! $this->liteSpeedHtml ) {
+            return $html;
+        }
+        $status = http_response_code();
+        $headers = headers_list();
+        if ( ! $this->liteSpeedCandidate || headers_sent() || ( $status !== false && $status !== 200 ) ||
+            ! self::isCompleteHtml( $html ) || ! YSCacheIntegrations::cacheableHtml( $html ) ||
+            preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) || ! self::headersAllowCache( $headers ) ||
+            self::headersProhibitSharedCache( $headers ) || ! $this->requestGenerationUnchanged() ||
+            $this->liteSpeedExpiry <= time() || $this->liteSpeedNonce !== YSCacheIntegrations::nonceVariant() ||
+            ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) || ! apply_filters( 'ys_cache_allow_html', true, $html ) ) {
+            $this->excludeLiteSpeedResponse();
+        }
+        return $html;
+    }
+
+    public function limitLiteSpeedTtl(): void {
+        if ( $this->liteSpeedCandidate && ! YSCacheLiteSpeed::limitTtl( $this->liteSpeedExpiry - time() ) ) {
+            $this->excludeLiteSpeedResponse();
+        }
     }
 
     private static function match( string $list, string $subject, string $mode ): bool {
@@ -406,9 +465,33 @@ final class YSCache {
         return true;
     }
 
+    private static function headersProhibitSharedCache( array $headers ): bool {
+        foreach ( $headers as $header ) {
+            if ( preg_match( '/^Pragma:\s*no-cache\b/i', $header ) ) {
+                return true;
+            }
+            if ( stripos( $header, 'Cache-Control:' ) !== 0 ) {
+                continue;
+            }
+            $directives = substr( $header, strlen( 'Cache-Control:' ) );
+            if ( preg_match( '/(?:^|,)\s*(?:private|no-cache|no-store|s-maxage\s*=\s*0)\s*(?:[,=]|$)/i', $directives ) ||
+                ( preg_match( '/(?:^|,)\s*max-age\s*=\s*0\s*(?:,|$)/i', $directives ) &&
+                    ! preg_match( '/(?:^|,)\s*s-maxage\s*=\s*[1-9]\d*\s*(?:,|$)/i', $directives ) ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function isCompleteHtml( string $html ): bool {
+        return preg_match( '~<!doctype\s+html|<html(?:\s|>)~i', substr( $html, 0, 4096 ) ) === 1 &&
+            preg_match( '~</html\s*>~i', substr( $html, -8192 ) ) === 1;
+    }
+
     public function serveOrCapture( string $template ): string {
         $settings = self::settings();
         if ( headers_sent() || is_feed() || is_preview() || is_trackback() || is_embed() || is_customize_preview() ) {
+            $this->excludeLiteSpeedResponse();
             return $template;
         }
 
@@ -416,16 +499,25 @@ final class YSCache {
         $path = self::cachePath( $settings );
         if ( $path === null || $this->privateResponse || is_user_logged_in() || is_404() || is_search() ||
             ( is_singular() && post_password_required() ) ) {
+            $this->excludeLiteSpeedResponse();
             $this->captureAssets( $settings['providers'] );
             return $template;
         }
 
         $delegated = self::delegatesHtml( $settings );
         $local = self::usesLocalHtml( $settings );
-        $sharedSafe = $this->externalHold && ( $delegated || $this->edgeHtml ) && YSCacheIntegrations::allowsExternalHtml();
+        $externalLanguageSafe = ( $delegated || $this->edgeHtml || $this->liteSpeedHtml ) && YSCacheIntegrations::allowsExternalHtml();
+        $sharedSafe = $this->externalHold && $externalLanguageSafe;
         $fastcgi = $sharedSafe && $delegated && ! empty( $settings['providers']['enhance']['rules_verified'] );
         $this->edgeHtml = $sharedSafe && $this->edgeHtml && ( ! $delegated || $fastcgi );
-        if ( ( ! $local && ! $fastcgi && ! $this->edgeHtml ) || self::blockingCache() !== '' ) {
+        $this->liteSpeedCandidate = $this->liteSpeedHtml && $externalLanguageSafe && ! $delegated &&
+            ! empty( $settings['providers']['litespeed']['rules_verified'] );
+        if ( $this->liteSpeedHtml && ! $this->liteSpeedCandidate ) {
+            $this->excludeLiteSpeedResponse();
+            $this->edgeHtml = false;
+        }
+        if ( ( ! $local && ! $fastcgi && ! $this->edgeHtml && ! $this->liteSpeedCandidate ) || self::blockingCache( $settings ) !== '' ) {
+            $this->excludeLiteSpeedResponse();
             $this->captureAssets( $settings['providers'] );
             return $template;
         }
@@ -435,12 +527,21 @@ final class YSCache {
         $status = http_response_code();
         if ( $nonce === null || ( $status !== false && $status !== 200 ) ||
             ! self::headersAllowCache( headers_list() ) ) {
+            $this->excludeLiteSpeedResponse();
             $this->captureAssets( $settings['providers'] );
             return $template;
         }
+        if ( $this->liteSpeedCandidate ) {
+            $this->liteSpeedNonce = $nonce;
+            $this->liteSpeedExpiry = time() + YSCacheIntegrations::externalHtmlTtl( $settings['ttl_seconds'] );
+        }
 
         if ( ! $local ) {
-            $this->captureHtml( $settings, $nonce, null, null, $fastcgi );
+            if ( $fastcgi || $this->edgeHtml ) {
+                $this->captureHtml( $settings, $nonce, null, null, $fastcgi );
+            } else {
+                $this->captureAssets( $settings['providers'] );
+            }
             return $template;
         }
 
@@ -477,7 +578,7 @@ final class YSCache {
         if ( ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' ) {
             return;
         }
-        $baseline = headers_list();
+        $baseline = $this->htmlResponseHeaders();
         $shared = $fastcgi || $this->edgeHtml ? $this->sharedHtmlState( $nonce, $settings['ttl_seconds'], $fastcgi ) : null;
         $complete = true;
         ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared ): string {
@@ -488,9 +589,8 @@ final class YSCache {
             $responseHtml = $this->rewriteAssets( $html, $settings['providers'] );
             $status = http_response_code();
             if ( ! $complete || headers_sent() || ( $status !== false && $status !== 200 ) ||
-                headers_list() !== $baseline || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ||
-                ! preg_match( '~<!doctype\s+html|<html(?:\s|>)~i', substr( $html, 0, 4096 ) ) ||
-                ! preg_match( '~</html\s*>~i', substr( $html, -8192 ) ) ||
+                $this->htmlResponseHeaders() !== $baseline || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ||
+                ! self::isCompleteHtml( $html ) ||
                 preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) ||
                 ! YSCacheIntegrations::cacheableHtml( $html ) ||
                 ! apply_filters( 'ys_cache_allow_html', true, $html ) ) {
@@ -509,7 +609,17 @@ final class YSCache {
 
     private function sharedHtmlState( string $nonce, int $ttl, bool $fastcgi ): array {
         return [ 'nonce' => $nonce, 'expiry' => time() + YSCacheIntegrations::externalHtmlTtl( $ttl ),
-            'fastcgi' => $fastcgi, 'headers' => headers_list() ];
+            'fastcgi' => $fastcgi, 'headers' => $this->htmlResponseHeaders() ];
+    }
+
+    private function htmlResponseHeaders(): array {
+        $headers = headers_list();
+        if ( ! $this->liteSpeedCandidate ) {
+            return $headers;
+        }
+        // Native cache metadata is written at shutdown, before WordPress flushes its output buffers.
+        return array_values( array_filter( $headers, static fn ( string $header ): bool =>
+            ! preg_match( '/^X-LiteSpeed-(?:Cache-Control:\s*public(?:,|$)|Tag:|Purge:)/i', $header ) ) );
     }
 
     private function releaseSharedHtml( string $html, array $state, bool $translated = false ): void {
@@ -519,15 +629,12 @@ final class YSCache {
             return;
         }
         $remaining = $state['expiry'] - time();
-        if ( $remaining <= 0 || headers_sent() || headers_list() !== $state['headers'] ||
+        if ( $remaining <= 0 || headers_sent() || $this->htmlResponseHeaders() !== $state['headers'] ||
             ! YSCacheIntegrations::cacheableHtml( $html ) || preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) ||
             ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) || $state['nonce'] !== YSCacheIntegrations::nonceVariant() ) {
             return;
         }
-        $unchanged = $this->requestPageGenerations !== null
-            ? $this->requestPageGenerations === YSCacheSettingsRepo::pageGenerations( (string) $_SERVER['REQUEST_URI'] )
-            : $this->requestGeneration === YSCacheSettingsRepo::generation();
-        if ( ! $unchanged || headers_list() !== $state['headers'] ) {
+        if ( ! $this->requestGenerationUnchanged() || $this->htmlResponseHeaders() !== $state['headers'] ) {
             return;
         }
         header( $state['fastcgi'] ? 'X-Accel-Expires: @' . $state['expiry'] : 'X-Accel-Expires: 0', true );
@@ -535,6 +642,12 @@ final class YSCache {
         if ( $state['fastcgi'] ) {
             header( 'X-YS-Cache: DELEGATED', true );
         }
+    }
+
+    private function requestGenerationUnchanged(): bool {
+        return $this->requestPageGenerations !== null
+            ? $this->requestPageGenerations === YSCacheSettingsRepo::pageGenerations( (string) ( $_SERVER['REQUEST_URI'] ?? '/' ) )
+            : $this->requestGeneration === YSCacheSettingsRepo::generation();
     }
 
     public function renderCachedPage(): void {

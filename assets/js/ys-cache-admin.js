@@ -105,13 +105,13 @@
         addCdn.disabled = rows.length >= Number(admin.dataset.maxLayers);
     };
 
-    const showResults = (layers) => {
-        results.replaceChildren();
+    const showResults = (layers, output = results) => {
+        output.replaceChildren();
         for (const layer of layers) {
             const item = document.createElement('li');
             item.dataset.status = layer.status;
             item.textContent = [layer.layer, layer.message].filter(Boolean).join(' — ');
-            results.append(item);
+            output.append(item);
         }
     };
 
@@ -188,19 +188,24 @@
                     css_minify: field('css_minify'),
                     js_minify: field('js_minify'),
                     js_defer: field('js_defer'),
+                    js_defer_include: field('js_defer_include'),
                     css_excludes: field('css_excludes'),
                     js_excludes: field('js_excludes'),
                 },
                 providers: {
                     enhance: enhanceConnection(),
                     opcache: { enabled: field('opcache_enabled') },
+                    litespeed: {
+                        enabled: field('litespeed_enabled'),
+                        rules_verified: field('litespeed_rules_verified'),
+                    },
                     cdn,
                 },
             };
             const data = await request('ys_cache_save', { settings: JSON.stringify(settings) });
             status.textContent = data.message;
             const owner = admin.querySelector('[data-cache-owner]');
-            const ownership = data.delegated ? 'external' : settings.enabled ? 'local' : 'disabled';
+            const ownership = data.delegated ? 'external' : settings.providers.litespeed.enabled ? 'litespeed' : settings.enabled ? 'local' : 'disabled';
             owner.textContent = owner.dataset[ownership];
             if (data.results?.length) showResults(data.results);
             const savedCdn = data.cdn || [];
@@ -301,14 +306,18 @@
         } else if (button.dataset.enhance) {
             run(button, () => checkEnhance(button.dataset.enhance));
         } else if (button.dataset.purge) {
+            const panel = button.closest('[data-tab-panel]');
+            const output = panel?.querySelector('[data-tab-purge-results]') || results;
+            const feedback = panel?.querySelector('[data-tab-purge-status]') || purgeStatus;
             run(button, async () => {
-                results.replaceChildren();
+                output.replaceChildren();
                 const data = await request('ys_cache_purge', { scope: button.dataset.purge });
-                showResults(data.results);
-            }, purgeStatus);
+                showResults(data.results, output);
+            }, feedback);
         }
     });
-    selectTab(window.location.hash.replace(/^#ys-cache-panel-/, '') || 'html', false);
+    const activeTab = window.location.hash.replace(/^#ys-cache-panel-/, '');
+    selectTab(activeTab === 'enhance' ? 'ys-cloud' : activeTab || 'html', false);
     validateLifetime();
     refreshCdnRows();
     if (admin.dataset.hasEnhance === '1') {

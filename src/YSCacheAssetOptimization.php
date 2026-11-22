@@ -13,6 +13,7 @@ final class YSCacheAssetOptimization {
     private const MAX_FILES = 256;
     private const RETENTION = 14 * 86400;
     private const REFRESH_AFTER = 12 * 3600;
+    private const ASSET_FORMAT_VERSION = 2;
     private const PRIVATE_PATH = '~(?:^|/)(?:private|protected|woocommerce_uploads|wc-logs|node_modules|tests?|fixtures?|backups?|\.[^/]+)(?:/|$)~i';
 
     public static function register(): void {
@@ -29,17 +30,19 @@ final class YSCacheAssetOptimization {
             'js_defer'   => ! empty( $options['js_defer'] ),
             'css_excludes' => self::sanitizeRules( $options['css_excludes'] ?? '' ),
             'js_excludes'  => self::sanitizeRules( $options['js_excludes'] ?? '' ),
+            'js_defer_include' => self::sanitizeRules( $options['js_defer_include'] ?? '', true ),
         ];
     }
 
-    private static function sanitizeRules( $input ): string {
+    private static function sanitizeRules( $input, bool $handlesOnly = false ): string {
         if ( ! is_string( $input ) ) {
             return '';
         }
         $rules = [];
+        $pattern = $handlesOnly ? '~\A[A-Za-z0-9_.@/:-]{1,512}\z~D' : '~\A[A-Za-z0-9_.@%/*-]{1,512}\z~D';
         foreach ( preg_split( '/\R/', substr( $input, 0, 12000 ) ) as $rule ) {
             $rule = trim( $rule );
-            if ( preg_match( '~\A[A-Za-z0-9_.@%/*-]{1,512}\z~D', $rule ) ) {
+            if ( preg_match( $pattern, $rule ) ) {
                 $rules[ $rule ] = true;
             }
         }
@@ -87,12 +90,17 @@ final class YSCacheAssetOptimization {
 
     public static function deferScripts(): void {
         $options = self::options();
-        if ( ! $options['js_defer'] || ! self::allowsOptimization() ) {
+        if ( ! $options['js_defer'] || $options['js_defer_include'] === '' || ! self::allowsOptimization() ) {
             return;
         }
+        // WordPress cannot identify raw inline scripts that run before a deferred handle.
+        $included = array_fill_keys( explode( "\n", $options['js_defer_include'] ), true );
         $scripts = wp_scripts();
         foreach ( $scripts->queue as $entry ) {
             $handle = explode( '?', $entry, 2 )[0];
+            if ( ! isset( $included[ $handle ] ) ) {
+                continue;
+            }
             $asset = $scripts->registered[ $handle ] ?? null;
             if ( ! $asset || ! is_string( $asset->src ) || in_array( $handle, $scripts->done, true ) ||
                 $scripts->get_data( $handle, 'strategy' ) || $scripts->get_data( $handle, 'before' ) ||
@@ -272,7 +280,7 @@ final class YSCacheAssetOptimization {
         if ( $storage === null ) {
             return null;
         }
-        $hash = hash( 'sha256', YS_CACHE_VERSION . '|' . self::origin( $parts ) . $parts['path'] . '|' . $contents );
+        $hash = hash( 'sha256', YS_CACHE_VERSION . '|' . self::ASSET_FORMAT_VERSION . '|' . self::origin( $parts ) . $parts['path'] . '|' . $contents );
         $filename = $hash . '.' . $type;
         $target = $storage['directory'] . '/' . $filename;
         if ( ! self::reuse( $storage['directory'], $target ) ) {
@@ -393,6 +401,7 @@ final class YSCacheAssetOptimization {
         }
         $result = '';
         $space = false;
+        $atDeclarationBoundary = false;
         for ( $i = 0, $length = strlen( $css ); $i < $length; ) {
             $start = $i;
             $char = $css[ $i++ ];
@@ -404,7 +413,9 @@ final class YSCacheAssetOptimization {
                 // Escaped identifiers can spell URL-related functions the lexer cannot recognize.
                 return null;
             }
+            $comment = false;
             if ( $char === '/' && ( $css[ $i ] ?? '' ) === '*' ) {
+                $comment = true;
                 $end = strpos( $css, '*/', $i + 1 );
                 if ( $end === false ) {
                     return null;
@@ -424,6 +435,15 @@ final class YSCacheAssetOptimization {
                 }
                 $i = $end;
                 $token = substr( $css, $start, $i - $start );
+            } elseif ( $atDeclarationBoundary && $char === '-' && ( $css[ $i ] ?? '' ) === '-' ) {
+                $custom = self::customCssProperty( $css, $start, $i );
+                if ( $custom === null ) {
+                    return null;
+                }
+                $token = $custom;
+            } elseif ( $char === '@' && preg_match( '/\G@(?:namespace|property|function|mixin)(?![a-z0-9_-])/i', $css, $match, 0, $start ) ) {
+                // Rules with URL or structural semantics outside of ordinary CSS declarations.
+                return null;
             } elseif ( $char === '@' && preg_match( '/\G@import(?![a-z0-9_-])/i', $css, $match, 0, $start ) ) {
                 $i = $start + strlen( $match[0] );
                 $import = self::cssImport( $css, $i, $source );
@@ -431,9 +451,12 @@ final class YSCacheAssetOptimization {
                     return null;
                 }
                 $token = '@import ' . $import;
+            } elseif ( str_contains( 'vaeVAE', $char ) && self::cssIdentifierBoundary( $css, $start ) &&
+                preg_match( '/\G(?:var|attr|env)\(/i', $css, $match, 0, $start ) ) {
+                // A substituted URL can use the base of its consuming declaration.
+                return null;
             } elseif ( $char === 'u' || $char === 'U' ) {
-                $previous = $start > 0 ? $css[ $start - 1 ] : '';
-                if ( strncasecmp( substr( $css, $start, 4 ), 'url(', 4 ) === 0 && ! preg_match( '/[a-z0-9_\x80-\xff-]/i', $previous ) ) {
+                if ( strncasecmp( substr( $css, $start, 4 ), 'url(', 4 ) === 0 && self::cssIdentifierBoundary( $css, $start ) ) {
                     $i = $start + 4;
                     $url = self::cssFunction( $css, $i, $source );
                     if ( $url === null ) {
@@ -453,8 +476,80 @@ final class YSCacheAssetOptimization {
             }
             $result .= $token;
             $space = false;
+            if ( ! $comment ) {
+                $atDeclarationBoundary = in_array( $token, [ '{', ';', '}' ], true );
+            }
         }
         return $result;
+    }
+
+    private static function cssIdentifierBoundary( string $css, int $start ): bool {
+        return $start === 0 || ! preg_match( '/[a-z0-9_\x80-\xff-]/i', $css[ $start - 1 ] );
+    }
+
+    private static function customCssProperty( string $css, int $start, int &$i ): ?string {
+        if ( ! preg_match( '/\G--[a-z0-9_\x80-\xff-]+/i', $css, $name, 0, $start ) ) {
+            return null;
+        }
+        $i = $start + strlen( $name[0] );
+        while ( true ) {
+            $i += strspn( $css, " \t\r\n\f", $i );
+            if ( substr( $css, $i, 2 ) !== '/*' ) {
+                break;
+            }
+            $commentEnd = strpos( $css, '*/', $i + 2 );
+            if ( $commentEnd === false ) {
+                return null;
+            }
+            $i = $commentEnd + 2;
+        }
+        if ( ( $css[ $i ] ?? '' ) !== ':' ) {
+            return null;
+        }
+        $valueStart = ++$i;
+        $end = self::customCssValueEnd( $css, $valueStart );
+        if ( $end === null ) {
+            return null;
+        }
+        $i = $end;
+        // CSSOM can expose this value as author data. Preserve its exact bytes.
+        return substr( $css, $start, $end - $start );
+    }
+
+    private static function customCssValueEnd( string $css, int $start ): ?int {
+        $closing = [ '(' => ')', '[' => ']', '{' => '}' ];
+        $stack = [];
+        for ( $i = $start, $length = strlen( $css ); $i < $length; ++$i ) {
+            $char = $css[ $i ];
+            if ( $char === '"' || $char === "'" ) {
+                $end = self::stringEnd( $css, $i );
+                if ( $end === null ) {
+                    return null;
+                }
+                $i = $end - 1;
+            } elseif ( $char === '/' && ( $css[ $i + 1 ] ?? '' ) === '*' ) {
+                $end = strpos( $css, '*/', $i + 2 );
+                if ( $end === false ) {
+                    return null;
+                }
+                $i = $end + 1;
+            } elseif ( $char === '\\' ) {
+                return null;
+            } elseif ( str_contains( 'uvaesiUVAESI', $char ) && self::cssIdentifierBoundary( $css, $i ) &&
+                preg_match( '/\G(?:url|var|attr|env|src|image(?:-set)?)\(/i', $css, $match, 0, $i ) ) {
+                return null;
+            } elseif ( $stack === [] && ( $char === ';' || $char === '}' ) ) {
+                return $i;
+            } elseif ( isset( $closing[ $char ] ) ) {
+                if ( count( $stack ) > 128 ) {
+                    return null;
+                }
+                $stack[] = $closing[ $char ];
+            } elseif ( str_contains( ')]}', $char ) && array_pop( $stack ) !== $char ) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static function stringEnd( string $css, int $start ): ?int {

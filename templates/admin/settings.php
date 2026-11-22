@@ -4,6 +4,8 @@ defined( 'ABSPATH' ) || exit;
 
 $enhance = $providers['enhance'] ?? [];
 $opcache = $providers['opcache'] ?? [];
+$liteSpeedSettings = $providers['litespeed'] ?? [];
+$liteSpeedReady = ! empty( $liteSpeed['available'] );
 $cdnRows = $providers['cdn'] ?? [];
 $assetSettings = $settings['assets'] ?? [];
 $credentialMissing = __( 'Not configured', 'ys-cache' );
@@ -27,8 +29,9 @@ $sections = [
     ] ],
     'integrations' => [ __( 'Integrations', 'ys-cache' ), 'admin-network', [
         'detection' => __( 'Automatic detection', 'ys-cache' ),
-        'enhance' => 'Enhance',
         'cdn' => __( 'CDN layers', 'ys-cache' ),
+        'ys-cloud' => __( 'YS CLOUD Integration', 'ys-cache' ),
+        'litespeed' => __( 'LiteSpeed Cache (Beta)', 'ys-cache' ),
     ] ],
     'help' => [ __( 'Help', 'ys-cache' ), 'book-alt', [
         'connections' => __( 'Connection setup', 'ys-cache' ),
@@ -118,7 +121,7 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
         <h2 id="ys-cache-purge-heading"><?php esc_html_e( 'Purge cache', 'ys-cache' ); ?></h2>
         <div class="ys-cache-purge-actions">
             <button type="button" class="button ys-cache-purge-main" data-purge="all"><?php esc_html_e( 'Purge entire site', 'ys-cache' ); ?></button>
-            <?php foreach ( [ 'local' => __( 'Purge HTML cache', 'ys-cache' ), 'enhance' => __( 'Purge Enhance Nginx', 'ys-cache' ), 'cdn' => __( 'Purge CDN', 'ys-cache' ), 'opcache' => __( 'Reset OPcache', 'ys-cache' ) ] as $scope => $label ) : ?>
+            <?php foreach ( [ 'local' => __( 'Purge HTML cache', 'ys-cache' ), 'cdn' => __( 'Purge CDN', 'ys-cache' ), 'opcache' => __( 'Reset OPcache', 'ys-cache' ) ] as $scope => $label ) : ?>
                 <button type="button" class="button" data-purge="<?php echo esc_attr( $scope ); ?>"><?php echo esc_html( $label ); ?></button>
             <?php endforeach; ?>
         </div>
@@ -154,14 +157,15 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="html" id="ys-cache-panel-html" aria-labelledby="ys-cache-tab-html">
             <h2><?php esc_html_e( 'HTML cache', 'ys-cache' ); ?></h2>
             <?php
-            $owner = $delegated ? 'external' : ( ! empty( $settings['enabled'] ) ? 'local' : 'disabled' );
+            $owner = $delegated ? 'external' : ( ! empty( $liteSpeedSettings['enabled'] ) ? 'litespeed' : ( ! empty( $settings['enabled'] ) ? 'local' : 'disabled' ) );
             $ownership = [
-                'external' => __( 'Enhance manages the HTML cache.', 'ys-cache' ),
+                'external' => __( 'YS CLOUD manages the HTML cache.', 'ys-cache' ),
+                'litespeed' => __( 'LiteSpeed Cache manages the HTML cache.', 'ys-cache' ),
                 'local' => __( 'YS CACHE manages the HTML cache.', 'ys-cache' ),
                 'disabled' => __( 'HTML caching is disabled.', 'ys-cache' ),
             ];
             ?>
-            <p data-cache-owner data-external="<?php echo esc_attr( $ownership['external'] ); ?>" data-local="<?php echo esc_attr( $ownership['local'] ); ?>" data-disabled="<?php echo esc_attr( $ownership['disabled'] ); ?>"><?php echo esc_html( $ownership[ $owner ] ); ?></p>
+            <p data-cache-owner data-external="<?php echo esc_attr( $ownership['external'] ); ?>" data-litespeed="<?php echo esc_attr( $ownership['litespeed'] ); ?>" data-local="<?php echo esc_attr( $ownership['local'] ); ?>" data-disabled="<?php echo esc_attr( $ownership['disabled'] ); ?>"><?php echo esc_html( $ownership[ $owner ] ); ?></p>
             <label class="ys-cache-switch">
                 <input name="enabled" type="checkbox" role="switch" <?php checked( ! empty( $settings['enabled'] ) ); ?>>
                 <span class="ys-cache-switch-track" aria-hidden="true"></span>
@@ -187,7 +191,7 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <span class="ys-cache-switch-track" aria-hidden="true"></span>
                 <?php esc_html_e( 'Purge caches when published content changes', 'ys-cache' ); ?>
             </label>
-            <p class="description"><?php esc_html_e( 'Enhance and enabled CDN integrations follow this setting. CDN layers set to Manual only are cleared through manual purge actions.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Enabled server and CDN integrations follow this setting. CDN layers set to Manual only are cleared through manual purge actions.', 'ys-cache' ); ?></p>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="exclusions" id="ys-cache-panel-exclusions" aria-labelledby="ys-cache-tab-exclusions" hidden>
             <h2><?php esc_html_e( 'Exclusions', 'ys-cache' ); ?></h2>
@@ -250,6 +254,13 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
             </div>
             <p class="description"><?php esc_html_e( 'Minify reduces eligible local script size. Defer lets compatible scripts run after the browser parses the page.', 'ys-cache' ); ?></p>
             <div class="ys-cache-grid ys-cache-asset-exclusions">
+                <label><?php esc_html_e( 'Script handles to defer', 'ys-cache' ); ?>
+                    <textarea name="js_defer_include" rows="4" maxlength="12000" aria-describedby="ys-cache-js-defer-help"><?php echo esc_textarea( $assetSettings['js_defer_include'] ?? '' ); ?></textarea>
+                </label>
+            </div>
+            <p class="description" id="ys-cache-js-defer-help"><?php esc_html_e( 'Enter one exact, registered WordPress script handle per line. Defer applies only to listed handles. Exclusions take precedence.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Test affected interactions after enabling defer. Keep scripts that rely on inline initialization or strict execution order in the exclusions.', 'ys-cache' ); ?></p>
+            <div class="ys-cache-grid ys-cache-asset-exclusions">
                 <label><?php esc_html_e( 'JavaScript exclusions', 'ys-cache' ); ?>
                     <textarea name="js_excludes" rows="5" maxlength="12000" aria-describedby="ys-cache-js-exclusions-help"><?php echo esc_textarea( $assetSettings['js_excludes'] ?? '' ); ?></textarea>
                 </label>
@@ -263,27 +274,11 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <span class="ys-cache-switch-track" aria-hidden="true"></span>
                 <?php esc_html_e( 'Detect compatible server integrations', 'ys-cache' ); ?>
             </label>
-            <p class="description"><?php esc_html_e( 'Detect OPcache and any Enhance connection preconfigured by the host. Application exclusions remain active.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Detect OPcache and server cache integrations already available for this site. Application exclusions remain active.', 'ys-cache' ); ?></p>
             <dl class="ys-cache-detection-types">
                 <div><dt><?php esc_html_e( 'Local HTML and OPcache', 'ys-cache' ); ?></dt><dd><?php esc_html_e( 'These layers can be purged without API credentials.', 'ys-cache' ); ?></dd></div>
-                <div><dt><?php esc_html_e( 'Enhance and CDN', 'ys-cache' ); ?></dt><dd><?php esc_html_e( 'These services use provider API credentials. Ask your host to provision Enhance for this site. Enhance purging is available after the connection is configured.', 'ys-cache' ); ?></dd></div>
+                <div><dt><?php esc_html_e( 'Server and CDN integrations', 'ys-cache' ); ?></dt><dd><?php esc_html_e( 'A supported server integration or connected provider is needed to purge those caches.', 'ys-cache' ); ?></dd></div>
             </dl>
-            <details class="ys-cache-host-setup">
-                <summary><?php esc_html_e( 'Host-managed Enhance configuration', 'ys-cache' ); ?></summary>
-                <p class="description"><?php
-                    printf(
-                        /* translators: %s: site configuration filename. */
-                        esc_html__( 'Your host can set these constants in %s for this site. You can also enter the credentials in the Enhance tab.', 'ys-cache' ),
-                        '<code>wp-config.php</code>'
-                    );
-                ?></p>
-                <ul>
-                    <li><code>YS_CACHE_ENHANCE_URL</code></li>
-                    <li><code>YS_CACHE_ENHANCE_DOMAIN_ID</code></li>
-                    <li><code>YS_CACHE_ENHANCE_TOKEN</code></li>
-                    <li><code>YS_CACHE_ENHANCE_ORG_ID</code> <?php esc_html_e( '(optional)', 'ys-cache' ); ?></li>
-                </ul>
-            </details>
             <?php if ( $integrations ) : ?>
                 <h3><?php esc_html_e( 'Detected application integrations', 'ys-cache' ); ?></h3>
                 <ul class="ys-cache-integrations">
@@ -293,11 +288,21 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 </ul>
             <?php endif; ?>
         </section>
-        <section class="ys-cache-card" role="tabpanel" data-tab-panel="enhance" id="ys-cache-panel-enhance" aria-labelledby="ys-cache-tab-enhance" hidden>
-            <h2>Enhance</h2>
+        <section class="ys-cache-card" role="tabpanel" data-tab-panel="cdn" id="ys-cache-panel-cdn" aria-labelledby="ys-cache-tab-cdn" hidden>
+            <h2><?php esc_html_e( 'CDN layers', 'ys-cache' ); ?></h2>
+            <p class="description"><?php esc_html_e( 'Order layers from origin to edge. Each enabled CDN layer can follow the site’s automatic purge setting or be set to manual only.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'To deliver HTML through a CDN, route the site’s canonical hostname through the provider in DNS. For static files, enter a dedicated CDN hostname and enable URL rewriting. Signed, private, and logged-in asset URLs keep their original host.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Before allowing CDN HTML caching, verify bypass rules for cookies, query strings, authorization, and requests other than GET and HEAD.', 'ys-cache' ); ?></p>
+            <div id="ys-cache-cdn-list"><?php foreach ( $cdnRows as $index => $row ) { $renderRow( $row, $index ); } ?></div>
+            <template id="ys-cache-cdn-template"><?php $renderRow( [] ); ?></template>
+            <p><button type="button" class="button" data-cdn-add><?php esc_html_e( 'Add CDN layer', 'ys-cache' ); ?></button></p>
+        </section>
+        <section class="ys-cache-card" role="tabpanel" data-tab-panel="ys-cloud" id="ys-cache-panel-ys-cloud" aria-labelledby="ys-cache-tab-ys-cloud" hidden>
+            <h2><?php esc_html_e( 'YS CLOUD Integration', 'ys-cache' ); ?></h2>
+            <p class="description"><?php esc_html_e( 'Connect the server cache for your YS CLOUD site using the credentials provided for this site.', 'ys-cache' ); ?></p>
             <div class="ys-cache-options">
-                <label><input type="checkbox" name="enhance_enabled" <?php checked( ! empty( $enhance['enabled'] ) ); ?>> <?php esc_html_e( 'Enable Enhance Nginx purging', 'ys-cache' ); ?></label>
-                <label><input type="checkbox" name="enhance_clear_token"> <?php esc_html_e( 'Remove Enhance token', 'ys-cache' ); ?></label>
+                <label><input type="checkbox" name="enhance_enabled" <?php checked( ! empty( $enhance['enabled'] ) ); ?>> <?php esc_html_e( 'Enable YS CLOUD server cache purging', 'ys-cache' ); ?></label>
+                <label><input type="checkbox" name="enhance_clear_token"> <?php esc_html_e( 'Remove saved API token', 'ys-cache' ); ?></label>
             </div>
             <?php if ( ! empty( $lastAutoPurge['time'] ) ) : ?>
                 <?php
@@ -318,13 +323,13 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <?php if ( ! empty( $lastAutoPurge['layers'] ) ) : ?>
                     <ul class="ys-cache-results">
                         <?php foreach ( $lastAutoPurge['layers'] as $result ) : ?>
-                            <li data-status="<?php echo esc_attr( $result['status'] ); ?>"><?php echo esc_html( $result['layer'] . ' — ' . $result['message'] ); ?></li>
+                            <li data-status="<?php echo esc_attr( $result['status'] ); ?>"><?php echo esc_html( str_replace( [ 'Enhance Nginx', 'Enhance' ], 'YS CLOUD', $result['layer'] . ' — ' . $result['message'] ) ); ?></li>
                         <?php endforeach; ?>
                     </ul>
                 <?php endif; ?>
             <?php endif; ?>
             <div class="ys-cache-grid">
-                <label><?php esc_html_e( 'Enhance control panel URL', 'ys-cache' ); ?>
+                <label><?php esc_html_e( 'YS CLOUD control panel URL', 'ys-cache' ); ?>
                     <input type="url" name="enhance_url" placeholder="https://panel.example.com" value="<?php echo esc_attr( $enhance['url'] ?? '' ); ?>">
                 </label>
                 <label><?php esc_html_e( 'Domain ID', 'ys-cache' ); ?>
@@ -333,47 +338,61 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <label><?php esc_html_e( 'Organization ID (optional)', 'ys-cache' ); ?>
                     <input type="text" name="enhance_org_id" value="<?php echo esc_attr( $enhance['org_id'] ?? '' ); ?>">
                 </label>
-                <label><?php esc_html_e( 'Enhance API Token', 'ys-cache' ); ?>
+                <label><?php esc_html_e( 'YS CLOUD API token', 'ys-cache' ); ?>
                     <input type="password" name="enhance_token" autocomplete="new-password" placeholder="<?php echo esc_attr( empty( $enhance['token'] ) ? $credentialMissing : $credentialSaved ); ?>">
                 </label>
             </div>
-            <h3><?php esc_html_e( 'Enhance HTML integration', 'ys-cache' ); ?></h3>
-            <p class="description"><?php esc_html_e( 'Use Enhance to cache HTML. YS CACHE stops using local HTML files. Enhance follows the site’s automatic purge setting.', 'ys-cache' ); ?></p>
+            <h3><?php esc_html_e( 'Server HTML cache', 'ys-cache' ); ?></h3>
+            <p class="description"><?php esc_html_e( 'YS CLOUD can manage the HTML cache. In this mode, YS CACHE stops using local HTML files and follows the site’s automatic purge setting.', 'ys-cache' ); ?></p>
             <div class="ys-cache-actions">
-                <button type="button" class="button" data-enhance="status"><?php esc_html_e( 'Check FastCGI status', 'ys-cache' ); ?></button>
+                <button type="button" class="button" data-enhance="status"><?php esc_html_e( 'Check server cache status', 'ys-cache' ); ?></button>
                 <button type="button" class="button" data-enhance="preview"><?php esc_html_e( 'Preview exclusions for saved settings', 'ys-cache' ); ?></button>
                 <button type="button" class="button" data-enhance="sync"><?php esc_html_e( 'Sync suggested exclusions', 'ys-cache' ); ?></button>
+                <button type="button" class="button" data-purge="enhance"><?php esc_html_e( 'Purge YS CLOUD cache', 'ys-cache' ); ?></button>
             </div>
-            <p data-enhance-status class="description" aria-live="polite" data-enabled="<?php esc_attr_e( 'Enhance FastCGI is enabled. Verify the Nginx bypass rules before enabling HTML integration.', 'ys-cache' ); ?>" data-disabled="<?php esc_attr_e( 'Enhance FastCGI is disabled.', 'ys-cache' ); ?>"></p>
+            <p data-enhance-status class="description" aria-live="polite" data-enabled="<?php esc_attr_e( 'The server cache is enabled. Verify bypass rules before using it for HTML.', 'ys-cache' ); ?>" data-disabled="<?php esc_attr_e( 'The server cache is disabled.', 'ys-cache' ); ?>"></p>
+            <div class="ys-cache-status" data-tab-purge-status role="status" aria-live="polite"></div>
+            <ul class="ys-cache-results" data-tab-purge-results aria-live="polite"></ul>
             <ul data-enhance-paths data-missing="<?php esc_attr_e( 'Ready to sync', 'ys-cache' ); ?>" data-added="<?php esc_attr_e( 'Added', 'ys-cache' ); ?>" aria-live="polite"></ul>
             <div class="ys-cache-options">
-                <label><input type="checkbox" name="enhance_delegate_html" <?php checked( $delegated ); ?>> <?php esc_html_e( 'Use Enhance for HTML caching', 'ys-cache' ); ?></label>
-                <label><input type="checkbox" name="enhance_rules_verified" <?php checked( ! empty( $enhance['rules_verified'] ) ); ?>> <?php esc_html_e( 'I verified that Nginx bypasses the cache for stateful requests.', 'ys-cache' ); ?></label>
+                <label><input type="checkbox" name="enhance_delegate_html" <?php checked( $delegated ); ?>> <?php esc_html_e( 'Use YS CLOUD for HTML caching', 'ys-cache' ); ?></label>
+                <label><input type="checkbox" name="enhance_rules_verified" <?php checked( ! empty( $enhance['rules_verified'] ) ); ?>> <?php esc_html_e( 'I verified that the server bypasses the cache for stateful requests.', 'ys-cache' ); ?></label>
             </div>
-            <p class="description"><?php esc_html_e( 'Sync known storefront and translated paths. Verify that Nginx also handles cookies outside the allowlist, authorization headers, query strings, methods other than GET and HEAD, forms, and request-dependent languages.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Sync known storefront and translated paths. Verify the server rules for cookies outside the allowlist, authorization headers, query strings, methods other than GET and HEAD, forms, and request-dependent languages.', 'ys-cache' ); ?></p>
         </section>
-        <section class="ys-cache-card" role="tabpanel" data-tab-panel="cdn" id="ys-cache-panel-cdn" aria-labelledby="ys-cache-tab-cdn" hidden>
-            <h2><?php esc_html_e( 'CDN layers', 'ys-cache' ); ?></h2>
-            <p class="description"><?php esc_html_e( 'Order layers from origin to edge. Each enabled CDN layer can follow the site’s automatic purge setting or be set to manual only.', 'ys-cache' ); ?></p>
-            <p class="description"><?php esc_html_e( 'To deliver HTML through a CDN, route the site’s canonical hostname through the provider in DNS. For static files, enter a dedicated CDN hostname and enable URL rewriting. Signed, private, and logged-in asset URLs keep their original host.', 'ys-cache' ); ?></p>
-            <p class="description"><?php esc_html_e( 'Before allowing CDN HTML caching, verify bypass rules for cookies, query strings, authorization, and requests other than GET and HEAD.', 'ys-cache' ); ?></p>
-            <div id="ys-cache-cdn-list"><?php foreach ( $cdnRows as $index => $row ) { $renderRow( $row, $index ); } ?></div>
-            <template id="ys-cache-cdn-template"><?php $renderRow( [] ); ?></template>
-            <p><button type="button" class="button" data-cdn-add><?php esc_html_e( 'Add CDN layer', 'ys-cache' ); ?></button></p>
+        <section class="ys-cache-card" role="tabpanel" data-tab-panel="litespeed" id="ys-cache-panel-litespeed" aria-labelledby="ys-cache-tab-litespeed" hidden>
+            <h2><?php esc_html_e( 'LiteSpeed Cache (Beta)', 'ys-cache' ); ?></h2>
+            <p class="description"><?php esc_html_e( 'This integration requests cache purges through LiteSpeed Cache on supported servers. Live LiteSpeed server verification is pending.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'When this integration is enabled, CDN clearing continues after the server receives the origin purge request.', 'ys-cache' ); ?></p>
+            <?php if ( ! empty( $liteSpeed['message'] ) ) : ?>
+                <p><?php echo esc_html( $liteSpeed['message'] ); ?></p>
+            <?php endif; ?>
+            <div class="ys-cache-switches">
+                <label class="ys-cache-switch">
+                    <input name="litespeed_enabled" type="checkbox" role="switch" <?php checked( ! empty( $liteSpeedSettings['enabled'] ) ); ?> <?php disabled( ! $liteSpeedReady && empty( $liteSpeedSettings['enabled'] ) ); ?>>
+                    <span class="ys-cache-switch-track" aria-hidden="true"></span>
+                    <?php esc_html_e( 'Use LiteSpeed Cache for HTML and origin purges', 'ys-cache' ); ?>
+                </label>
+                <label>
+                    <input name="litespeed_rules_verified" type="checkbox" aria-describedby="ys-cache-litespeed-rules-help ys-cache-litespeed-prerequisites" <?php checked( ! empty( $liteSpeedSettings['rules_verified'] ) ); ?>>
+                    <?php esc_html_e( 'I verified that the server bypasses the cache for stateful requests.', 'ys-cache' ); ?>
+                </label>
+            </div>
+            <p class="description" id="ys-cache-litespeed-rules-help"><?php esc_html_e( 'The server can serve native cache hits before WordPress runs. Verify cache bypass for logins, carts and checkout, forms with visitor-specific data, authorization, and other stateful requests. Check that language URLs are isolated and request-dependent languages bypass the native cache.', 'ys-cache' ); ?></p>
+            <p class="description" id="ys-cache-litespeed-prerequisites"><?php esc_html_e( 'Disable LiteSpeed Guest Mode and forced cache rules before enabling the integration.', 'ys-cache' ); ?></p>
+            <p class="ys-cache-actions"><button type="button" class="button" data-purge="litespeed" <?php disabled( ! $liteSpeedReady ); ?>><?php esc_html_e( 'Purge LiteSpeed Cache', 'ys-cache' ); ?></button></p>
+            <div class="ys-cache-status" data-tab-purge-status role="status" aria-live="polite"></div>
+            <ul class="ys-cache-results" data-tab-purge-results aria-live="polite"></ul>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="connections" id="ys-cache-panel-connections" aria-labelledby="ys-cache-tab-connections" hidden>
             <h2><?php esc_html_e( 'Connection setup', 'ys-cache' ); ?></h2>
-            <h3>Enhance</h3>
-            <p><?php esc_html_e( 'If your hosting provider manages Enhance, ask them to provision the connection for this site. API token creation is handled by a hosting or control-panel administrator.', 'ys-cache' ); ?></p>
-            <h4><?php esc_html_e( 'For hosting administrators', 'ys-cache' ); ?></h4>
-            <ol>
-                <li><?php esc_html_e( 'In the appropriate Enhance organization, open Settings, then Access Tokens. Create a token with permission to read this site’s domain and manage its FastCGI cache. Set an expiration date and IP restrictions where available.', 'ys-cache' ); ?></li>
-                <li><?php esc_html_e( 'Copy the token and organization ID. Look up the site domain in the website domains endpoint and copy its domain ID. The website ID identifies the parent website.', 'ys-cache' ); ?> <code>GET /api/orgs/{org_id}/websites/{website_id}/domains</code></li>
-                <li><?php esc_html_e( 'Enter the HTTPS panel URL, domain ID, organization ID, and token in the Enhance tab. Check FastCGI status before enabling HTML integration.', 'ys-cache' ); ?></li>
-            </ol>
-            <p><a href="https://enhance.com/docs/website-tools/nginx/fastcgi-caching"><?php esc_html_e( 'Enhance FastCGI documentation', 'ys-cache' ); ?></a> · <a href="https://apidocs.enhance.com/spec/oas3-api.yaml"><?php esc_html_e( 'Enhance API reference', 'ys-cache' ); ?></a></p>
-            <h3><?php esc_html_e( 'CDN providers', 'ys-cache' ); ?></h3>
             <p><?php esc_html_e( 'Create a credential with access to read the resource and purge its cache. Enter the delivery hostname and use Find resource ID, or enter the resource ID from your provider dashboard.', 'ys-cache' ); ?></p>
+            <h3>Bunny CDN</h3>
+            <p><?php esc_html_e( 'In the bunny.net dashboard, open Account → API Key. Copy the account-level key into the Bunny CDN layer. Enter the Pull Zone hostname to find its ID, or enter the Pull Zone ID directly.', 'ys-cache' ); ?></p>
+            <p><a href="https://bunny.net/docs/account/api-keys"><?php esc_html_e( 'Bunny CDN API key instructions', 'ys-cache' ); ?></a></p>
+            <h3>Gcore</h3>
+            <p><?php esc_html_e( 'In the Gcore Customer Portal, open Profile → API tokens → Create token. Select a role that can read CDN resources and purge their cache. Copy the token from the creation dialog and paste it into the Gcore layer.', 'ys-cache' ); ?></p>
+            <p><a href="https://docs.gcore.com/developer-tools/rest-api/authentication"><?php esc_html_e( 'Gcore API token instructions', 'ys-cache' ); ?></a></p>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="import" id="ys-cache-panel-import" aria-labelledby="ys-cache-tab-import" hidden>
             <h2><?php esc_html_e( 'Automatic import', 'ys-cache' ); ?></h2>

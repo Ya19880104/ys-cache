@@ -79,9 +79,13 @@ final class YSCacheEnhancePurge {
             if ( isset( self::RETRY_DELAYS[ $attempt ] ) ) {
                 self::schedule( self::RETRY_DELAYS[ $attempt ] );
             }
-            $results = $cdn === []
+            $origins = [ 'enhance' => $providers['enhance'] ?? [], 'cdn' => $cdn ];
+            if ( ! empty( $providers['litespeed']['enabled'] ) ) {
+                $origins['litespeed'] = $providers['litespeed'];
+            }
+            $results = $cdn === [] && ! isset( $origins['litespeed'] )
                 ? YSCacheProviders::purge( $providers, 'enhance' )
-                : YSCacheProviders::purge( [ 'enhance' => $providers['enhance'] ?? [], 'cdn' => $cdn ] );
+                : YSCacheProviders::purge( $origins );
             $result = end( $results ) ?: [];
             $success = ( $result['status'] ?? '' ) === 'ok';
             $http = (int) ( $result['http'] ?? 0 );
@@ -114,7 +118,8 @@ final class YSCacheEnhancePurge {
     private static function target( array $providers, array $cdn ): string {
         $enhance = $providers['enhance'] ?? [];
         $enhance_enabled = ! empty( $enhance['enabled'] );
-        if ( $cdn === [] && ! $enhance_enabled ) {
+        $litespeed_enabled = ! empty( $providers['litespeed']['enabled'] );
+        if ( $cdn === [] && ! $enhance_enabled && ! $litespeed_enabled ) {
             return '';
         }
         $url = $enhance['url'] ?? '';
@@ -127,7 +132,7 @@ final class YSCacheEnhancePurge {
             $org = defined( 'YS_CACHE_ENHANCE_ORG_ID' ) ? YS_CACHE_ENHANCE_ORG_ID : '';
             $token = YS_CACHE_ENHANCE_TOKEN;
         }
-        if ( $cdn === [] ) {
+        if ( $cdn === [] && ! $litespeed_enabled ) {
             return ! $url || ! $domain || ! $token
                 ? ''
                 : hash( 'sha256', (string) wp_json_encode( [ $url, $domain, $org ] ) );
@@ -141,6 +146,9 @@ final class YSCacheEnhancePurge {
                 ] ) );
             }, $cdn ),
         ];
+        if ( $litespeed_enabled ) {
+            $identity['litespeed'] = true;
+        }
         return hash( 'sha256', (string) wp_json_encode( $identity ) );
     }
 

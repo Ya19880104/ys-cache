@@ -2,13 +2,15 @@
 
 [繁體中文](#繁體中文) · [Official downloads](https://yangsheep.com.tw/wordpress-plugins/ys-cache/)
 
-## Enhance
+## LiteSpeed Cache (Beta)
 
-1. Site owners should ask their hosting provider to configure this integration when their Enhance account has no access to API tokens. A hosting administrator with sufficient privileges can create one through **Settings → Access Tokens**. Use a credential whose verified rights cover only the relevant customer or site and allow the required FastCGI operations. Keep cluster-wide credentials on the hosting side.
-2. The hosting administrator can provide `YS_CACHE_ENHANCE_URL`, `YS_CACHE_ENHANCE_DOMAIN_ID`, `YS_CACHE_ENHANCE_TOKEN`, and, if required, `YS_CACHE_ENHANCE_ORG_ID` in the site’s `wp-config.php`. Alternatively, enter those values in the Enhance form if you have an appropriate token. The domains endpoint lists the Domain ID for the exact hostname. Automatic detection can recognize the host configuration without any of these values being entered in WordPress admin. Local HTML and available OPcache can be cleared without an API credential.
-3. In **Cache Management → Integrations → Enhance**, check the FastCGI status. Preview and synchronize the suggested path exclusions. Check translated and nested commerce paths as well as the bypass rules for cookies, query strings, authorisation, cart headers and non-GET/HEAD requests before you give Enhance control of HTML. Use the entire-site action for Enhance because its purge API clears the whole domain.
+In **Cache Management → Integrations → LiteSpeed Cache**, check detection before enabling the integration. It requires a single-site WordPress installation, LiteSpeed or OpenLiteSpeed server caching, LiteSpeed Cache 7.9.2 or later and a reachable same-origin WordPress admin loopback. Turn off LiteSpeed Guest Mode and forced cache rules. Verify server-level bypasses for logins, cart and checkout sessions, forms and translated dynamic routes on the actual host, then confirm them in the integration. LiteSpeed manages origin HTML. YS CACHE can shorten storage to the configured HTML lifetime and current guest nonce window.
 
-[Enhance API](https://apidocs.enhance.com/spec/oas3-api.yaml) · [Cache exclusions](https://enhance.com/docs/website-tools/nginx/cache-exclusion)
+Entire-site and single-page clearing dispatch to LiteSpeed first. Content updates use the main automatic clearing switch and each CDN layer’s own follow setting. If YS CACHE cannot confirm origin dispatch, it pauses the CDN purge for that run. Verify origin eviction and subsequent edge refresh on the host, including on translated URLs. [LiteSpeed WordPress cache API](https://docs.litespeedtech.com/lscache/lscwp/api/)
+
+## OPcache
+
+OPcache resets PHP’s in-memory opcode cache for the serving PHP runtime. This requires the extension and permission to call `opcache_reset()`. A WordPress request does not reset other isolated PHP pools. [PHP manual](https://www.php.net/manual/en/function.opcache-reset.php)
 
 ## CDN and CNAME
 
@@ -26,19 +28,31 @@ Add each CDN layer from the origin outward and choose whether it follows the mai
 
 [Cloudflare](https://developers.cloudflare.com/api/resources/cache/methods/purge/) · [Bunny CDN](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) · [Gcore](https://docs.gcore.com/api-reference/cdn/tools/purge-cache)
 
+### Bunny CDN API key
+
+1. Sign in to the Bunny dashboard and open **Account → API Key**. Copy the account API key. Ask the primary account owner if the key is unavailable to your account.
+2. In WordPress, set the CDN layer provider to **Bunny CDN**, enter a hostname already attached to the Pull Zone, and paste the key into **API token / key**. Use **Find resource ID** to select the matching Pull Zone, then enable API purging and save. [Bunny account API keys](https://bunny.net/docs/account/api-keys)
+
+### Gcore API token
+
+1. Sign in to the Gcore Customer Portal. Open the avatar menu and select **Profile → API tokens → Create token**. Set a name and expiry, grant the CDN permissions needed to read resources and purge cache, and copy the token while it is displayed.
+2. In WordPress, select **Gcore**, enter a hostname already attached to the CDN resource, and paste the token into **API token / key**. Use **Find resource ID** to find the matching resource, then enable API purging and save. [Gcore API tokens](https://docs.gcore.com/account-settings/api-tokens)
+
 ## Forms and lifetime
 
 WPForms, Fluent Forms, JetFormBuilder and Contact Form 7 are detected automatically. The plugin examines the current page’s blocks and shortcodes and checks rendered HTML for form markup and private tokens. A footer or builder template with a form affects every page where the form is rendered. Check both a form page and an ordinary page with anonymous requests. Extending the configured lifetime to seven days still respects the active nonce window and eligible responses.
 
 ## 繁體中文
 
-### Enhance
+### LiteSpeed Cache（Beta）
 
-1. 一般網站用戶若在 Enhance 找不到建立 Token 的權限，請由主機服務商設定。有足夠權限的主機管理員可從 **Settings → Access Tokens** 建立憑證，並確認它只對該客戶或網站擁有必要的 FastCGI 權限。全平台管理憑證請留在主機端。
-2. 主機管理員可在該站的 `wp-config.php` 提供 `YS_CACHE_ENHANCE_URL`、`YS_CACHE_ENHANCE_DOMAIN_ID`、`YS_CACHE_ENHANCE_TOKEN`，視面板需求加上 `YS_CACHE_ENHANCE_ORG_ID`。網域 ID 可從網站的 domains API 找到。配置完整後，WordPress 後台可自動偵測。若管理員提供了適用的 Token，也可從後台填入。本機 HTML 與可用的 OPcache 能在沒有 API 憑證的情況下清除。
-3. 在「快取管理 → 整合 → Enhance」檢查 FastCGI 狀態，預覽並同步建議排除。切換 HTML 管理權前，驗證非 GET／HEAD 請求、Cookie、query string、授權和購物車標頭，以及翻譯後或巢狀的結帳等路徑。Enhance 清除 API 以網域為單位，請使用全站清除。
+在「快取管理 → 整合 → LiteSpeed Cache」確認偵測結果後再啟用。需 WordPress 單站、已啟用快取的 LiteSpeed 或 OpenLiteSpeed 伺服器、LiteSpeed Cache 7.9.2 以上，以及可連通的 WordPress 同源後台回環請求。關閉 LiteSpeed 的訪客模式與強制快取規則。在實際主機確認伺服器會略過登入、購物車、結帳、表單及各語系的動態路徑，並在整合頁確認。啟用後由 LiteSpeed 管理來源 HTML，YS CACHE 可依 HTML 設定及訪客 nonce 效期縮短快取時間。
 
-[Enhance API](https://apidocs.enhance.com/spec/oas3-api.yaml) · [快取排除](https://enhance.com/docs/website-tools/nginx/cache-exclusion)
+全站和單頁清除先送到 LiteSpeed。更新內容時依主設定自動清除，CDN 各層可選擇是否跟隨。若 YS CACHE 無法確認來源已接手清除，該次會暫停清除 CDN。請在實際主機驗證來源舊快取已移除，再檢查 CDN 與各語系的新回應。 [LiteSpeed WordPress 快取 API](https://docs.litespeedtech.com/lscache/lscwp/api/)
+
+### OPcache
+
+OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 PHP 啟用擴充並允許呼叫 `opcache_reset()`。各自隔離的 PHP 集區需在其環境重設。 [PHP 手冊](https://www.php.net/manual/en/function.opcache-reset.php)
 
 ### CDN 和 CNAME
 
@@ -55,6 +69,16 @@ WPForms, Fluent Forms, JetFormBuilder and Contact Form 7 are detected automatica
 由來源到外層依序新增 CDN，並設定各層是否跟隨主設定的內容更新清除。Cloudflare 可用具備 Zone Read 與 Cache Purge 權限的 Token 查找資源 ID，Bunny CDN 使用帳戶 API Key，Gcore 使用客戶 API Token。查找會配對已存在的資源。僅填 CNAME 的層若也要透過 API 清除，請同時設定供應商與憑證。用各語系的訪客網址測兩次，確認換圖後的路徑與對應語系一致，且符合條件的資源使用 CNAME。若站點配置了 CSP 或跨網域政策，請確認 CDN 網域可載入相應資源。
 
 [Cloudflare](https://developers.cloudflare.com/api/resources/cache/methods/purge/) · [Bunny CDN](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) · [Gcore](https://docs.gcore.com/api-reference/cdn/tools/purge-cache)
+
+#### Bunny CDN API Key
+
+1. 登入 Bunny 控制台，開啟 **Account → API Key**，複製帳戶 API Key。若帳號看不到 Key，請由主帳號持有人處理。
+2. 回到 WordPress 的「CDN 層」，選擇 **Bunny CDN**，填入已綁定 Pull Zone 的主機名稱及 API Key。按「查詢資源 ID」配對 Pull Zone，再啟用 API 清除並儲存。 [Bunny 帳戶 API Key](https://bunny.net/docs/account/api-keys)
+
+#### Gcore API Token
+
+1. 登入 Gcore Customer Portal，從頭像選單開啟 **Profile → API tokens → Create token**。設定名稱和效期，授予讀取 CDN 資源與清除快取所需權限，並在畫面顯示時複製 Token。
+2. 回到 WordPress 的「CDN 層」，選擇 **Gcore**，填入已綁定 CDN 資源的主機名稱及 Token。按「查詢資源 ID」配對資源，再啟用 API 清除並儲存。 [Gcore API Token](https://docs.gcore.com/account-settings/api-tokens)
 
 ### 表單和快取效期
 

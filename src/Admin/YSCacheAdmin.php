@@ -7,6 +7,7 @@ use YangSheep\Cache\YSCacheCdnDiscovery;
 use YangSheep\Cache\YSCacheEnhanceIntegration;
 use YangSheep\Cache\YSCacheEnhancePurge;
 use YangSheep\Cache\YSCacheIntegrations;
+use YangSheep\Cache\YSCacheLiteSpeed;
 use YangSheep\Cache\YSCacheProviders;
 use YangSheep\Cache\YSCacheStorage;
 
@@ -53,7 +54,8 @@ final class YSCacheAdmin {
         $blocking = YSCache::blockingCache();
         $providers = $settings['providers'];
         $delegated = YSCache::delegatesHtml( $settings );
-        $storageReady = $delegated || YSCacheStorage::directory() !== '';
+        $liteSpeed = YSCacheLiteSpeed::status();
+        $storageReady = $delegated || YSCache::usesLiteSpeed( $settings ) || YSCacheStorage::directory() !== '';
         $hasEnhanceConnection = YSCacheProviders::enhanceConnection( $providers['enhance'] ?? [] ) !== null;
         $lastAutoPurge = YSCacheEnhancePurge::lastResult();
         $forms = YSCacheIntegrations::formPlugins();
@@ -73,13 +75,28 @@ final class YSCacheAdmin {
         $settings = self::postedObject( 'settings', 80000 );
         $before = YSCache::settings();
         $candidate = YSCacheProviders::sanitize( (array) ( $settings['providers'] ?? $before['providers'] ), $before['providers'] );
+        $candidateSettings = [ 'providers' => $candidate ];
         $wasDelegated = YSCache::delegatesHtml( $before );
-        $delegated = YSCache::delegatesHtml( [ 'providers' => $candidate ] );
+        $delegated = YSCache::delegatesHtml( $candidateSettings );
+        $usesLiteSpeed = YSCache::usesLiteSpeed( $candidateSettings );
+        $enablingLiteSpeed = $usesLiteSpeed && ! YSCache::usesLiteSpeed( $before );
         $beforeEnhance = $before['providers']['enhance'] ?? [];
         $enhanceChanged = $candidate['enhance'] !== array_diff_key( $beforeEnhance, [ 'auto_purge' => true ] );
-        $blocking = YSCache::blockingCache();
-        if ( ( ! empty( $settings['enabled'] ) || $delegated ) && $blocking !== '' ) {
+        $blocking = YSCache::blockingCache( $candidateSettings );
+        if ( ( ! empty( $settings['enabled'] ) || $delegated || $usesLiteSpeed ) && $blocking !== '' ) {
             wp_send_json_error( [ 'message' => __( 'Another page cache is active. Disable it before enabling YS CACHE.', 'ys-cache' ) ], 409 );
+        }
+        if ( $delegated && $usesLiteSpeed ) {
+            wp_send_json_error( [ 'message' => __( 'Choose one server integration to manage HTML caching.', 'ys-cache' ) ], 409 );
+        }
+        if ( $usesLiteSpeed && empty( $candidate['litespeed']['rules_verified'] ) ) {
+            wp_send_json_error( [ 'message' => __( 'Verify the LiteSpeed server bypass rules for stateful requests before enabling the integration.', 'ys-cache' ) ], 409 );
+        }
+        if ( $enablingLiteSpeed ) {
+            $state = YSCacheLiteSpeed::status();
+            if ( ! $state['available'] ) {
+                wp_send_json_error( [ 'message' => $state['message'] ], 409 );
+            }
         }
         if ( $delegated ) {
             $enhance = $candidate['enhance'];
@@ -89,7 +106,7 @@ final class YSCacheAdmin {
             if ( ! $wasDelegated || $enhanceChanged ) {
                 $state = YSCacheEnhanceIntegration::status( $candidate );
                 if ( $state['enabled'] !== true ) {
-                    wp_send_json_error( [ 'message' => __( 'The Enhance API must confirm that FastCGI is enabled for this domain before Enhance can manage the HTML cache.', 'ys-cache' ) ], 409 );
+                    wp_send_json_error( [ 'message' => __( 'YS CLOUD must confirm that the server cache is enabled for this domain before it can manage HTML.', 'ys-cache' ) ], 409 );
                 }
             }
         }
@@ -100,10 +117,12 @@ final class YSCacheAdmin {
             YSCacheEnhanceIntegration::fingerprint( $beforeEnhance ) !==
             YSCacheEnhanceIntegration::fingerprint( $candidate['enhance'] ) )
             ? YSCacheProviders::purge( $before['providers'], 'enhance' ) : [];
-        if ( $delegated && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
+        if ( ( $delegated || $usesLiteSpeed ) && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
             $saved = YSCache::settings();
             if ( ! empty( $saved['auto_purge'] ) ) {
                 YSCacheEnhancePurge::onContentChange( $saved );
+            } elseif ( $enablingLiteSpeed ) {
+                $results = array_merge( $results, YSCacheProviders::purge( $candidate, 'litespeed' ) );
             } elseif ( $enhanceChanged ) {
                 $results = array_merge( $results, YSCacheProviders::purge( $candidate, 'enhance' ) );
             }
@@ -149,7 +168,7 @@ final class YSCacheAdmin {
             }
             wp_send_json_success( $result );
         }
-        wp_send_json_error( [ 'message' => __( 'Invalid Enhance operation.', 'ys-cache' ) ], 400 );
+        wp_send_json_error( [ 'message' => __( 'Invalid YS CLOUD operation.', 'ys-cache' ) ], 400 );
     }
 
     public static function discoverCdn(): void {
@@ -167,7 +186,7 @@ final class YSCacheAdmin {
     public static function purge(): void {
         self::authorize();
         $scope = isset( $_POST['scope'] ) && is_string( $_POST['scope'] ) ? sanitize_key( $_POST['scope'] ) : '';
-        if ( ! in_array( $scope, [ 'local', 'all', 'opcache', 'enhance', 'cdn' ], true ) ) {
+        if ( ! in_array( $scope, [ 'local', 'all', 'opcache', 'enhance', 'litespeed', 'cdn' ], true ) ) {
             wp_send_json_error( [ 'message' => __( 'Invalid purge scope.', 'ys-cache' ) ], 400 );
         }
         wp_send_json_success( [ 'results' => YSCache::purge( $scope ) ] );

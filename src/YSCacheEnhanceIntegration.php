@@ -19,19 +19,19 @@ final class YSCacheEnhanceIntegration {
         $connection = self::connection( $providers );
         if ( $connection === null ) {
             return [ 'status' => 'skipped', 'enabled' => null, 'http' => 0,
-                'message' => __( 'Configure the Enhance panel, domain UUID and API token to check FastCGI.', 'ys-cache' ) ];
+                'message' => __( 'Configure the YS CLOUD connection to check server cache status.', 'ys-cache' ) ];
         }
 
         $response = self::request( $connection, 'GET', self::CACHE_ROUTE );
         if ( $response['ok'] && is_bool( $response['body'] ) ) {
             $enabled = $response['body'];
             return [ 'status' => 'ok', 'enabled' => $enabled, 'http' => $response['http'],
-                'message' => $enabled ? __( 'Enhance FastCGI cache is enabled.', 'ys-cache' )
-                    : __( 'Enhance FastCGI cache is disabled.', 'ys-cache' ) ];
+                'message' => $enabled ? __( 'YS CLOUD server cache is enabled.', 'ys-cache' )
+                    : __( 'YS CLOUD server cache is disabled.', 'ys-cache' ) ];
         }
 
         return [ 'status' => 'error', 'enabled' => null, 'http' => $response['http'],
-            'message' => __( 'Unable to verify FastCGI status from Enhance.', 'ys-cache' ) ];
+            'message' => __( 'Unable to verify YS CLOUD server cache status.', 'ys-cache' ) ];
     }
 
     public static function preview( array $providers, array $settings = [] ): array {
@@ -48,7 +48,7 @@ final class YSCacheEnhanceIntegration {
         $existing = self::readPaths( self::connection( $providers ) );
         if ( ! $existing['ok'] ) {
             return array_replace( $preview, [ 'status' => 'error', 'http' => $existing['http'],
-                'message' => __( 'Unable to read the existing Enhance cache exclusions.', 'ys-cache' ) ] );
+                'message' => __( 'Unable to read the existing YS CLOUD cache exclusions.', 'ys-cache' ) ] );
         }
 
         $preview['existing'] = $existing['body'];
@@ -79,7 +79,7 @@ final class YSCacheEnhanceIntegration {
         $readback = self::readPaths( $connection );
         if ( ! $readback['ok'] ) {
             return array_replace( $preview, [ 'status' => 'error', 'http' => $readback['http'], 'failed' => $attempted,
-                'message' => __( 'Enhance received exclusion requests. Their final state could not be verified.', 'ys-cache' ) ] );
+                'message' => __( 'YS CLOUD received the exclusion requests. Their final state could not be verified.', 'ys-cache' ) ] );
         }
 
         $added = array_values( array_intersect( $preview['missing'], $readback['body'] ) );
@@ -93,7 +93,7 @@ final class YSCacheEnhanceIntegration {
             'missing'  => $missing,
             'failed'   => $failed,
             'message'  => $missing ? __( 'Some suggested paths are still missing. Review the remaining paths before using FastCGI as the HTML cache.', 'ys-cache' )
-                : __( 'The suggested paths are present in Enhance. Existing exclusions were preserved.', 'ys-cache' ),
+                : __( 'The suggested paths are now included in the YS CLOUD cache exclusions.', 'ys-cache' ),
         ] );
     }
 

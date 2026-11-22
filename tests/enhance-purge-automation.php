@@ -262,5 +262,30 @@ namespace {
     run_worker();
     verify( count( $dispatched ) === 3 && ! pending(), 'changed CDN order discards obsolete retry' );
 
+    prepare_fixture( [ 'enabled' => false ] );
+    $provider_settings['litespeed'] = [ 'enabled' => true ];
+    $provider_settings['cdn'] = [
+        [ 'provider' => 'bunny', 'enabled' => true, 'zone_id' => '7' ],
+        [ 'provider' => 'gcore', 'enabled' => true, 'auto_purge' => 'off', 'zone_id' => '8' ],
+    ];
+    $purge_scope = 'all';
+    $purge_settings = [
+        'enhance' => $provider_settings['enhance'],
+        'cdn' => [ $provider_settings['cdn'][0] ],
+        'litespeed' => $provider_settings['litespeed'],
+    ];
+    $native_ok = [ 'layer' => 'LiteSpeed Cache', 'status' => 'ok', 'http' => 400 ];
+    $native_unconfirmed = [ 'layer' => 'LiteSpeed Cache', 'status' => 'error', 'http' => 400, 'retryable' => true ];
+    $responses = [ [ $native_unconfirmed ], [ $native_ok, $bunny_ok ], [ $native_unconfirmed ] ];
+    content_change( $provider_settings );
+    verify( YSCacheEnhancePurge::lastResult()['status'] === 'retry', 'unconfirmed native dispatch remains eligible for retry' );
+    verify( YSCacheEnhancePurge::lastResult()['layers'] === [ $native_unconfirmed ], 'automatic job reports no CDN attempts while native dispatch is unconfirmed' );
+    run_worker();
+    verify( YSCacheEnhancePurge::lastResult()['layers'] === [ $native_ok, $bunny_ok ], 'retry clears LiteSpeed before CDN layers that follow the main setting' );
+    content_change( $provider_settings );
+    $provider_settings['litespeed']['enabled'] = false;
+    run_worker();
+    verify( count( $dispatched ) === 3 && ! pending(), 'changing the origin owner discards the previous retry' );
+
     echo "Automatic origin and CDN purge checks passed.\n";
 }

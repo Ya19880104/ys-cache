@@ -137,9 +137,11 @@ final class YSCacheProviders
             }
         }
 
+        $litespeed = (array) ($input['litespeed'] ?? $previous['litespeed'] ?? []);
         return [
             'opcache' => ['enabled' => !empty($input['opcache']['enabled'])],
             'enhance' => $enhance,
+            'litespeed' => ['enabled' => !empty($litespeed['enabled']), 'rules_verified' => !empty($litespeed['rules_verified'])],
             'cdn' => $cdn,
         ];
     }
@@ -156,7 +158,7 @@ final class YSCacheProviders
 
     public static function purge(array $settings, string $scope = 'all', array $urls = []): array
     {
-        if (!in_array($scope, ['all', 'urls', 'opcache', 'enhance', 'cdn'], true)) {
+        if (!in_array($scope, ['all', 'urls', 'opcache', 'enhance', 'litespeed', 'cdn'], true) || ($scope === 'urls' && $urls === [])) {
             return [];
         }
 
@@ -171,6 +173,17 @@ final class YSCacheProviders
             }
         }
 
+        if (in_array($scope, ['all', 'litespeed', 'urls'], true) && !empty($settings['litespeed']['enabled'])) {
+            $result = YSCacheLiteSpeed::purge($scope === 'urls' ? $urls : []);
+            $results[] = $result;
+            if ($result['status'] !== 'ok') {
+                return $results;
+            }
+        }
+        if ($scope === 'litespeed' && empty($results)) {
+            $results[] = self::result('LiteSpeed Cache', 'skipped', __('LiteSpeed Cache integration is disabled.', 'ys-cache'));
+        }
+
         if (($scope === 'all' || $scope === 'enhance') && !empty($settings['enhance']['enabled'])) {
             $result = self::purgeEnhance((array) $settings['enhance']);
             $results[] = $result;
@@ -180,7 +193,7 @@ final class YSCacheProviders
         }
 
         if ($scope === 'enhance' && empty($results)) {
-            $results[] = self::result('Enhance Nginx', 'skipped', __('Enhance purge is disabled.', 'ys-cache'));
+            $results[] = self::result('YS CLOUD', 'skipped', __('YS CLOUD purge is disabled.', 'ys-cache'));
         }
 
         if (!in_array($scope, ['all', 'urls', 'cdn'], true)) {
@@ -329,7 +342,7 @@ final class YSCacheProviders
 
     private static function purgeEnhance(array $settings): array
     {
-        $label = 'Enhance Nginx';
+        $label = 'YS CLOUD';
         $connection = self::enhanceConnection($settings);
         if ($connection === null) {
             return self::result($label, 'error', __('Enter an HTTPS control panel URL, a domain UUID, and an API token.', 'ys-cache'));

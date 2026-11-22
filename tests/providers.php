@@ -65,6 +65,14 @@ function check($actual, $expected, $label) {
     }
 }
 
+final class FakeNativePurge {
+    public static function purge(array $urls): array {
+        $GLOBALS['http'][] = ['litespeed-origin', $urls];
+        return ['layer' => 'LiteSpeed Cache', 'status' => $GLOBALS['litespeed_status'] ?? 'ok'];
+    }
+}
+class_alias(FakeNativePurge::class, 'YangSheep\Cache\YSCacheLiteSpeed');
+
 require dirname(__DIR__) . '/src/YSCacheProviders.php';
 use YangSheep\Cache\YSCacheProviders as Providers;
 
@@ -170,6 +178,30 @@ $GLOBALS['http_status'] = [$gcore_endpoint => 429];
 check(array_column(Providers::purge($settings), 'status'), ['ok', 'ok', 'error'], 'Failure stops the chain at the affected CDN');
 check(array_column($GLOBALS['http'], 0), [$enhance_endpoint, $bunny_endpoint, $gcore_endpoint], 'Outer CDN skipped after inner CDN failure');
 unset($GLOBALS['http_status']);
+
+$liteSpeed = $settings;
+$liteSpeed['litespeed'] = ['enabled' => true];
+$cloudflare_endpoint = 'https://api.cloudflare.com/client/v4/zones/0123456789abcdef0123456789abcdef/purge_cache';
+$GLOBALS['http'] = [];
+check(array_column(Providers::purge($liteSpeed), 'status'), ['ok', 'ok', 'ok', 'ok', 'ok'], 'Full chain accepts native origin dispatch before the API layers');
+check(array_column($GLOBALS['http'], 0), ['litespeed-origin', $enhance_endpoint, $bunny_endpoint, $gcore_endpoint, $cloudflare_endpoint], 'LiteSpeed is the first origin stage');
+check($GLOBALS['http'][0][1], [], 'Full purge requests the complete LiteSpeed site');
+
+$GLOBALS['http'] = [];
+$GLOBALS['litespeed_status'] = 'error';
+check(array_column(Providers::purge($liteSpeed), 'status'), ['error'], 'Unconfirmed LiteSpeed dispatch holds all outer layers');
+check(array_column($GLOBALS['http'], 0), ['litespeed-origin'], 'No remote API call when LiteSpeed dispatch is unconfirmed');
+unset($GLOBALS['litespeed_status']);
+
+$GLOBALS['http'] = [];
+$liteSpeed['enhance']['enabled'] = false;
+$page = 'https://dev.example.com/zh/hello/';
+check(array_column(Providers::purge($liteSpeed, 'urls', [$page]), 'status'), ['ok', 'skipped', 'ok', 'ok'], 'Single translated page targets LiteSpeed before the HTML CDN layers');
+check(array_column($GLOBALS['http'], 0), ['litespeed-origin', $gcore_endpoint, $cloudflare_endpoint], 'Translated page leaves the image-only layer alone');
+check($GLOBALS['http'][0][1], [$page], 'Native purge receives the original page URL');
+check(json_decode($GLOBALS['http'][2][1]['body'], true), ['files' => [$page]], 'Cloudflare receives the translated page URL');
+check(Providers::purge($liteSpeed, 'urls'), [], 'An empty URL list never widens to a full-site LiteSpeed purge');
+check(Providers::sanitize([], $liteSpeed)['litespeed']['enabled'], true, 'An omitted LiteSpeed control preserves its stored setting');
 
 $auto = Providers::sanitize([
     'enhance' => ['enabled' => true, 'delegate_html' => true, 'rules_verified' => true],

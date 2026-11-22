@@ -33,13 +33,12 @@
 
 .ys-cache-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1200px) minmax(230px, 280px);
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
     align-items: start;
-    justify-content: start;
     gap: 18px;
 }
 
-.ys-cache-main { grid-area: 1 / 1; min-width: 0; max-width: 1200px; }
+.ys-cache-main { grid-area: 1 / 1; min-width: 0; }
 .ys-cache-sidebar {
     grid-area: 1 / 2;
     position: sticky;
@@ -190,8 +189,6 @@
 .ys-cache-detection-types > div { padding: 10px 12px; border: 1px solid var(--ys-cache-border); border-radius: 6px; background: #fff; }
 .ys-cache-detection-types dt { font-weight: 600; color: var(--ys-cache-accent-dark); }
 .ys-cache-detection-types dd { margin: 5px 0 0; }
-.ys-cache-host-setup summary { font-weight: 600; color: var(--ys-cache-accent-dark); cursor: pointer; }
-.ys-cache-host-setup code { overflow-wrap: anywhere; }
 .ys-cache-actions, .ys-cache-options { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .ys-cache-cdn .ys-cache-actions { margin-block-start: 12px; }
 .ys-cache-form-footer { margin-block-start: 16px; }
@@ -226,6 +223,7 @@
 
 .ys-cache-switch input:checked + .ys-cache-switch-track { background: var(--ys-cache-accent); }
 .ys-cache-switch input:checked + .ys-cache-switch-track::after { inset-inline-start: 19px; }
+.ys-cache-switch input:disabled + .ys-cache-switch-track { opacity: 0.55; }
 .ys-cache-switch input:focus-visible + .ys-cache-switch-track, .ys-cache-admin button:focus-visible { outline: 2px solid var(--ys-cache-focus); outline-offset: 2px; }
 .ys-cache-integrations { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 8px 0; }
 .ys-cache-integrations li {
