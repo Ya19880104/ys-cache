@@ -1,0 +1,153 @@
+# Traditional Chinese translations for YS CACHE Auto Import.
+msgid ""
+msgstr "Project-Id-Version: YS CACHE Auto Import 1.0.1-beta.2\nMIME-Version: 1.0\nContent-Type: text/plain; charset=UTF-8\nContent-Transfer-Encoding: 8bit\nLanguage: zh_TW\nPlural-Forms: nplurals=1; plural=0;\n"
+
+msgid "A supported cache plugin is active."
+msgstr "已找到啟用中且支援匯入的快取外掛。"
+
+msgid "A supported cache plugin is installed and inactive."
+msgstr "已找到已安裝且目前停用的相容快取外掛。"
+
+msgid "An image CDN is already configured in YS CACHE. Its settings were kept."
+msgstr "YS CACHE 已設定圖片 CDN，並保留現有設定。"
+
+msgid "An unfinished import was found. Restoring the previous plugin state."
+msgstr "已找到未完成的匯入。正在恢復原外掛狀態。"
+
+msgid "Automatically import compatible cache settings into YS CACHE."
+msgstr "自動將相容的快取設定匯入 YS CACHE。"
+
+msgid "Could not activate YS CACHE. Restoring the previous plugin state."
+msgstr "無法啟用 YS CACHE 外掛。正在恢復原外掛狀態。"
+
+msgid "Could not enable YS CACHE HTML caching. Restoring the previous plugin state."
+msgstr "無法啟用 YS CACHE 的 HTML 快取。正在恢復原外掛狀態。"
+
+msgid "Could not find the previous cache plugin. Check the Plugins screen and try again."
+msgstr "找不到原快取外掛。請檢查「外掛」頁面後重試。"
+
+msgid "Could not load YS CACHE. Check the plugin version and installation."
+msgstr "無法載入 YS CACHE。請確認外掛版本與安裝狀態。"
+
+msgid "Could not lock the import. Please try again shortly."
+msgstr "無法鎖定匯入程序。請稍後重試。"
+
+msgid "Could not restore the previous YS CACHE activation state."
+msgstr "無法恢復 YS CACHE 原本的啟用狀態。"
+
+msgid "Could not restore the previous plugin state. Check the Plugins screen."
+msgstr "無法恢復原外掛狀態。請檢查「外掛」頁面。"
+
+msgid "Could not save the import status. Check database permissions."
+msgstr "無法儲存匯入狀態。請確認資料庫權限。"
+
+msgid "Could not schedule automatic rollback. Plugin states were kept unchanged."
+msgstr "無法安排自動恢復。外掛保持目前的啟用狀態。"
+
+msgid "Could not verify that the previous cache plugin was deactivated. Checking rollback status."
+msgstr "無法確認原快取外掛是否已停用。正在檢查恢復狀態。"
+
+msgid "Could not verify that the previous cache plugin was restored. Check the Plugins screen."
+msgstr "無法確認原快取外掛是否已恢復。請檢查「外掛」頁面。"
+
+msgid "Could not verify the import result. Check which plugins are active before retrying."
+msgstr "無法確認匯入結果。請先查看外掛啟用狀態再重試。"
+
+msgid "Could not verify which plugin owns advanced-cache.php. Check your site's active cache plugin."
+msgstr "無法確認 advanced-cache.php 的所屬外掛。請確認網站目前啟用的快取外掛。"
+
+msgid "Deactivation of the previous cache plugin was interrupted. Checking rollback status."
+msgstr "停用原快取外掛時程序中止。正在檢查恢復狀態。"
+
+msgid "Import and enable HTML caching"
+msgstr "匯入並啟用 HTML 快取"
+
+msgid "Import results"
+msgstr "匯入結果"
+
+msgid "Install YS CACHE before retrying the import."
+msgstr "請先安裝 YS CACHE，再重試匯入。"
+
+msgid "Install YS CACHE first."
+msgstr "請先安裝 YS CACHE。"
+
+msgid "No compatible cache settings were found to import."
+msgstr "找不到可匯入的快取設定。"
+
+msgid "No compatible image CNAME was found in the source CDN settings."
+msgstr "來源的 CDN 設定中找不到可匯入的圖片 CNAME。"
+
+msgid "No supported cache plugin is installed."
+msgstr "找不到支援匯入的快取外掛。"
+
+msgid "Restore previous cache plugin"
+msgstr "恢復原快取外掛"
+
+msgid "Rollback of the last import has not been confirmed."
+msgstr "上次匯入的恢復狀態尚未確認。"
+
+msgid "Run a manual import of the cache lifetime, exclusion rules, and Cloudflare settings."
+msgstr "手動匯入快取效期、排除規則及 Cloudflare 設定。"
+
+msgid "Run the importer on a standalone WordPress site."
+msgstr "請在獨立的 WordPress 網站執行匯入。"
+
+msgid "Settings imported. YS CACHE HTML caching is enabled."
+msgstr "設定已匯入，YS CACHE 的 HTML 快取已啟用。"
+
+msgid "Some exclusion rules could not be converted (%s). Use literal values, URL paths, or the (.*) wildcard format and try again."
+msgstr "部分排除規則無法轉換（%s）。請改用字面值、URL 路徑或 (.*) 萬用字元格式後重試。"
+
+msgid "The YS CACHE installation is incomplete."
+msgstr "YS CACHE 安裝檔案不完整。"
+
+msgid "The combined exclusion rules could not be converted. Restoring the previous plugin state."
+msgstr "合併後的排除規則無法轉換。正在恢復原外掛狀態。"
+
+msgid "The import did not finish. The previous plugin state has been restored."
+msgstr "匯入未完成，已恢復匯入前的外掛啟用狀態。"
+
+msgid "The import form has expired. Reload the page and try again."
+msgstr "匯入表單已失效。請重新載入頁面後重試。"
+
+msgid "The imported cache lifetime exceeded seven days. YS CACHE applied its seven-day limit."
+msgstr "匯入的快取效期超過 7 天，已套用 YS CACHE 的 7 天上限。"
+
+msgid "The previous cache had no expiry. The existing YS CACHE lifetime was kept."
+msgstr "原快取未設定到期時間，已保留 YS CACHE 的效期。"
+
+msgid "The source CDN had file or page exclusions. Review the rules before enabling the image CDN in YS CACHE."
+msgstr "來源 CDN 設有檔案或頁面排除。請先檢查規則，再到 YS CACHE 啟用圖片 CDN。"
+
+msgid "The source Cloudflare zone or credentials were incomplete. Configure the integration in YS CACHE to enable purging."
+msgstr "來源的 Cloudflare 區域或驗證資料不完整。請到 YS CACHE 完成設定後啟用清除。"
+
+msgid "There is no import to roll back."
+msgstr "沒有待恢復的匯入。"
+
+msgid "This Cloudflare zone is already configured. The existing YS CACHE settings were kept."
+msgstr "已設定這個 Cloudflare 區域，並保留 YS CACHE 的現有設定。"
+
+msgid "Waiting for the next WordPress request to restore the previous plugin."
+msgstr "正在等待下一個 WordPress 請求恢復原外掛。"
+
+msgid "When you activate this importer, it automatically checks for compatible settings, switches the active cache plugin, and imports the settings."
+msgstr "啟用匯入工具後，系統會自動檢查相容設定、切換快取外掛並匯入設定。"
+
+msgid "YS CACHE Auto Import"
+msgstr "YS CACHE 自動匯入"
+
+msgid "YS CACHE HTML caching is enabled."
+msgstr "YS CACHE 的 HTML 快取已啟用。"
+
+msgid "YS CACHE applies its public-page rules to requests with query parameters and signed-in visitors."
+msgstr "含查詢參數或已登入訪客的請求會套用 YS CACHE 的公開頁面規則。"
+
+msgid "YS CACHE reached its CDN layer limit. The source Cloudflare zone was skipped."
+msgstr "YS CACHE 的 CDN 層數已達上限，因此略過來源的 Cloudflare 區域。"
+
+msgid "YS CACHE reached its CDN layer limit. The source image CNAME was skipped."
+msgstr "YS CACHE 的 CDN 層數已達上限，因此略過來源的圖片 CNAME。"
+
+msgid "Your account does not have permission to run the import."
+msgstr "你的帳號沒有執行匯入的權限。"

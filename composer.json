@@ -1,0 +1,8 @@
+{
+    "name": "yangsheep/ys-cache",
+    "description": "YANGSHEEP HTML cache and purge integrations for WordPress",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": { "php": ">=8.0" },
+    "autoload": { "psr-4": { "YangSheep\\Cache\\": "src/" } }
+}

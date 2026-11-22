@@ -1,0 +1,8 @@
+/.idea/
+/.vscode/
+/dist/
+*.zip
+*.log
+.env
+.env.*
+node_modules/
