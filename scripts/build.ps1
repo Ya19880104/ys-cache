@@ -38,6 +38,7 @@ $mainFiles = @(
     'src/Admin/YSCacheAdminBar.php',
     'src/Database/YSCacheSettingsRepo.php',
     'src/YSCache.php',
+    'src/YSCacheAssetOptimization.php',
     'src/YSCacheCdnDiscovery.php',
     'src/YSCacheEnhanceIntegration.php',
     'src/YSCacheEnhancePurge.php',
@@ -82,6 +83,16 @@ if ($hubChanges) {
     throw "The Hub Client file list changed. Review the package allowlist before rebuilding."
 }
 $mainFiles += $hubFiles | ForEach-Object { 'vendor/yangsheep/ys-plugin-hub-client/' + $_ }
+$optimizerPrefix = 'vendor/ys-cache-optimizer/peast'
+$optimizerRoot = Join-Path $projectRoot $optimizerPrefix
+$optimizerFiles = @(Get-ChildItem -LiteralPath $optimizerRoot -File -Recurse | ForEach-Object {
+    [System.IO.Path]::GetRelativePath($optimizerRoot, $_.FullName).Replace('\', '/')
+})
+if ($optimizerFiles -notcontains 'LICENSE' -or $optimizerFiles -notcontains 'README.md' -or
+    $optimizerFiles -notcontains 'src/Peast.php' -or ($optimizerFiles | Where-Object { $_ -notmatch '^(?:LICENSE|README\.md|src/[A-Za-z0-9_/]+\.php)$' })) {
+    throw 'The optimizer dependency contains unexpected files or is missing required source.'
+}
+$mainFiles += $optimizerFiles | ForEach-Object { "$optimizerPrefix/$_" }
 $importerFiles = @(
     'README.md',
     'ys-cache-import.php',

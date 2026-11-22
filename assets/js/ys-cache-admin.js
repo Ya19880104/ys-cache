@@ -5,8 +5,9 @@
     const form = document.getElementById('ys-cache-settings');
     const list = document.getElementById('ys-cache-cdn-list');
     const template = document.getElementById('ys-cache-cdn-template');
-    const status = admin.querySelector('[role="status"]');
-    const results = admin.querySelector('.ys-cache-results');
+    const status = admin.querySelector('[data-settings-status]');
+    const purgeStatus = admin.querySelector('[data-purge-status]');
+    const results = admin.querySelector('.ys-cache-purge-results');
     const enhanceStatus = admin.querySelector('[data-enhance-status]');
     const enhancePaths = admin.querySelector('[data-enhance-paths]');
     const addCdn = admin.querySelector('[data-cdn-add]');
@@ -15,6 +16,11 @@
     const panels = Array.from(admin.querySelectorAll('[data-tab-panel]'));
     const tabs = Array.from(admin.querySelectorAll('[role="tab"]'));
     const lastTab = new Map();
+    const lifetime = form.elements.namedItem('ttl_value');
+    const lifetimeUnit = form.elements.namedItem('ttl_unit');
+    const lifetimeFactors = Object.fromEntries(Array.from(lifetimeUnit.options, (option) => [option.value, Number(option.dataset.seconds)]));
+    const maxLifetime = 604800;
+    let previousUnit = lifetimeUnit.value;
 
     const read = (field) => field.type === 'checkbox' ? field.checked : field.value;
     const field = (name) => read(form.elements.namedItem(name));
@@ -23,7 +29,6 @@
     );
     const enhanceConnection = () => ({
         enabled: field('enhance_enabled'),
-        auto_purge: field('enhance_auto_purge'),
         delegate_html: field('enhance_delegate_html'),
         rules_verified: field('enhance_rules_verified'),
         url: field('enhance_url'),
@@ -31,6 +36,28 @@
         org_id: field('enhance_org_id'),
         token: field('enhance_token'),
         clear_token: field('enhance_clear_token'),
+    });
+
+    const lifetimeSeconds = (unit = lifetimeUnit.value) => {
+        const duration = lifetime.valueAsNumber * lifetimeFactors[unit];
+        const seconds = Math.round(duration);
+        return seconds >= 1 && seconds <= maxLifetime && Math.abs(duration - seconds) < 1e-8 ? seconds : null;
+    };
+
+    const validateLifetime = () => {
+        const seconds = lifetimeSeconds();
+        lifetime.setCustomValidity(lifetime.value && seconds === null ? lifetime.dataset.invalid : '');
+        return seconds;
+    };
+
+    lifetime.addEventListener('input', validateLifetime);
+    lifetimeUnit.addEventListener('change', () => {
+        const seconds = lifetimeSeconds(previousUnit);
+        const units = lifetimeFactors[lifetimeUnit.value];
+        previousUnit = lifetimeUnit.value;
+        lifetime.max = String(maxLifetime / units);
+        if (seconds !== null) lifetime.value = String(seconds / units);
+        validateLifetime();
     });
 
     const selectTab = (key, remember = true) => {
@@ -53,7 +80,10 @@
         const rows = Array.from(list.querySelectorAll('[data-cdn-row]'));
         rows.forEach((row, index) => {
             const type = row.querySelector('[data-key="provider"]').value;
-            row.querySelectorAll('[data-api-only]').forEach((item) => { item.hidden = type === 'cname'; });
+            row.querySelectorAll('[data-api-only]').forEach((item) => {
+                item.hidden = type === 'cname';
+                item.querySelectorAll('input, select').forEach((input) => { input.disabled = item.hidden; });
+            });
             const scope = row.querySelector('[data-key="scope"]');
             Array.from(scope.options).forEach((option) => {
                 option.disabled = type === 'cname' && !['code', 'static'].includes(option.value);
@@ -104,15 +134,15 @@
         return payload.data;
     };
 
-    const run = async (button, work) => {
+    const run = async (button, work, feedback = status) => {
         button.disabled = true;
-        status.textContent = '';
-        status.classList.remove('ys-cache-error');
+        feedback.textContent = '';
+        feedback.classList.remove('ys-cache-error');
         try {
             await work();
         } catch (error) {
-            status.textContent = error.message || admin.dataset.error;
-            status.classList.add('ys-cache-error');
+            feedback.textContent = error.message || admin.dataset.error;
+            feedback.classList.add('ys-cache-error');
         } finally {
             button.disabled = false;
         }
@@ -137,15 +167,30 @@
 
     form.addEventListener('submit', (event) => {
         event.preventDefault();
+        const seconds = validateLifetime();
+        if (seconds === null) {
+            selectTab('html');
+            lifetime.reportValidity();
+            return;
+        }
         run(event.submitter || form.querySelector('[type="submit"]'), async () => {
             const cdn = Array.from(list.querySelectorAll('[data-cdn-row]'), rowData);
             const settings = {
                 enabled: field('enabled'),
-                ttl_seconds: field('ttl_seconds'),
+                ttl_seconds: seconds,
+                ttl_unit: lifetimeUnit.value,
+                auto_purge: field('auto_purge'),
                 auto_detect: field('auto_detect'),
                 exclude_paths: field('exclude_paths'),
                 exclude_cookies: field('exclude_cookies'),
                 exclude_agents: field('exclude_agents'),
+                assets: {
+                    css_minify: field('css_minify'),
+                    js_minify: field('js_minify'),
+                    js_defer: field('js_defer'),
+                    css_excludes: field('css_excludes'),
+                    js_excludes: field('js_excludes'),
+                },
                 providers: {
                     enhance: enhanceConnection(),
                     opcache: { enabled: field('opcache_enabled') },
@@ -162,12 +207,12 @@
             list.querySelectorAll('[data-cdn-row]').forEach((row) => {
                 const fields = rowData(row);
                 const index = savedCdn.findIndex((saved) => saved.provider === fields.provider
-                    && saved.zone_id === fields.zone_id.trim().toLowerCase()
+                    && saved.zone_id === (fields.zone_id || '').trim().toLowerCase()
                     && saved.hostname === fields.hostname.trim().toLowerCase()
                     && saved.auth_email === (fields.provider === 'cloudflare' ? fields.auth_email.trim() : ''));
                 row.dataset.savedIndex = index === -1 ? '' : index;
                 row.querySelector('[data-key="html_cache_verified"]').checked = Boolean(savedCdn[index]?.html_cache_verified);
-                if (index !== -1) row.querySelector('[data-key="auto_purge"]').checked = Boolean(savedCdn[index].auto_purge);
+                if (index !== -1) row.querySelector('[data-key="auto_purge"]').value = savedCdn[index].auto_purge === 'off' ? 'off' : 'inherit';
             });
             form.querySelectorAll('[type="password"]').forEach((input) => {
                 if (input.value) input.placeholder = admin.dataset.credentialSaved;
@@ -229,6 +274,7 @@
             refreshCdnRows();
             focus.focus();
         } else if (button.hasAttribute('data-cdn-remove')) {
+            if (!window.confirm(admin.dataset.confirmCdnRemoval)) return;
             button.closest('[data-cdn-row]').remove();
             refreshCdnRows();
             addCdn.focus();
@@ -255,19 +301,15 @@
         } else if (button.dataset.enhance) {
             run(button, () => checkEnhance(button.dataset.enhance));
         } else if (button.dataset.purge) {
-            const menu = button.closest('.ys-cache-purge-menu');
-            if (menu) {
-                menu.open = false;
-                menu.querySelector('summary').focus();
-            }
             run(button, async () => {
                 results.replaceChildren();
                 const data = await request('ys_cache_purge', { scope: button.dataset.purge });
                 showResults(data.results);
-            });
+            }, purgeStatus);
         }
     });
     selectTab(window.location.hash.replace(/^#ys-cache-panel-/, '') || 'html', false);
+    validateLifetime();
     refreshCdnRows();
     if (admin.dataset.hasEnhance === '1') {
         const check = admin.querySelector('[data-enhance="status"]');

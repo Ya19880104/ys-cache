@@ -32,11 +32,14 @@ final class YSCacheSettingsRepo {
         return [
             'enabled'         => false,
             'ttl_seconds'     => self::DEFAULT_TTL_SECONDS,
+            'ttl_unit'        => 's',
+            'auto_purge'      => true,
             'auto_detect'     => true,
             'exclude_paths'   => '',
             'exclude_cookies' => '',
             'exclude_agents'  => '',
             'providers'       => [],
+            'assets'          => [],
         ];
     }
 

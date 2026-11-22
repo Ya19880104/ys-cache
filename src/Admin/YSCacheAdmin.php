@@ -75,6 +75,8 @@ final class YSCacheAdmin {
         $candidate = YSCacheProviders::sanitize( (array) ( $settings['providers'] ?? $before['providers'] ), $before['providers'] );
         $wasDelegated = YSCache::delegatesHtml( $before );
         $delegated = YSCache::delegatesHtml( [ 'providers' => $candidate ] );
+        $beforeEnhance = $before['providers']['enhance'] ?? [];
+        $enhanceChanged = $candidate['enhance'] !== array_diff_key( $beforeEnhance, [ 'auto_purge' => true ] );
         $blocking = YSCache::blockingCache();
         if ( ( ! empty( $settings['enabled'] ) || $delegated ) && $blocking !== '' ) {
             wp_send_json_error( [ 'message' => __( 'Another page cache is active. Disable it before enabling YS CACHE.', 'ys-cache' ) ], 409 );
@@ -84,7 +86,7 @@ final class YSCacheAdmin {
             if ( empty( $enhance['rules_verified'] ) ) {
                 wp_send_json_error( [ 'message' => __( 'Verify that Nginx bypasses its cache before looking up login, cart, form, and other stateful requests.', 'ys-cache' ) ], 409 );
             }
-            if ( ! $wasDelegated || $enhance !== $before['providers']['enhance'] ) {
+            if ( ! $wasDelegated || $enhanceChanged ) {
                 $state = YSCacheEnhanceIntegration::status( $candidate );
                 if ( $state['enabled'] !== true ) {
                     wp_send_json_error( [ 'message' => __( 'The Enhance API must confirm that FastCGI is enabled for this domain before Enhance can manage the HTML cache.', 'ys-cache' ) ], 409 );
@@ -94,13 +96,18 @@ final class YSCacheAdmin {
         if ( ! YSCache::save( $settings ) ) {
             wp_send_json_error( [ 'message' => __( 'Unable to save settings. Check database table and cache directory permissions.', 'ys-cache' ) ], 500 );
         }
-        if ( $delegated ) {
-            YSCacheEnhancePurge::onContentChange( $candidate );
-        }
         $results = $wasDelegated && ( ! $delegated ||
-            YSCacheEnhanceIntegration::fingerprint( $before['providers']['enhance'] ) !==
+            YSCacheEnhanceIntegration::fingerprint( $beforeEnhance ) !==
             YSCacheEnhanceIntegration::fingerprint( $candidate['enhance'] ) )
             ? YSCacheProviders::purge( $before['providers'], 'enhance' ) : [];
+        if ( $delegated && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
+            $saved = YSCache::settings();
+            if ( ! empty( $saved['auto_purge'] ) ) {
+                YSCacheEnhancePurge::onContentChange( $saved );
+            } elseif ( $enhanceChanged ) {
+                $results = array_merge( $results, YSCacheProviders::purge( $candidate, 'enhance' ) );
+            }
+        }
         wp_send_json_success( [
             'message' => __( 'Settings saved. The existing YS CACHE HTML cache was invalidated.', 'ys-cache' ),
             'delegated' => $delegated,
@@ -134,7 +141,11 @@ final class YSCacheAdmin {
         if ( $operation === 'sync' ) {
             $result = YSCacheEnhanceIntegration::sync( $providers, $settings );
             if ( ! empty( $result['added'] ) && YSCache::delegatesHtml( $settings ) ) {
-                YSCacheEnhancePurge::onContentChange( $providers );
+                if ( ! empty( $settings['auto_purge'] ) ) {
+                    YSCache::instance()->invalidateOnChange();
+                } else {
+                    $result['purge'] = YSCache::purge( 'enhance' );
+                }
             }
             wp_send_json_success( $result );
         }

@@ -16,7 +16,11 @@ final class YSCacheEnhancePurge {
         add_action( self::HOOK, [ self::class, 'run' ] );
     }
 
-    public static function onContentChange( array $providers ): void {
+    public static function onContentChange( array $settings ): void {
+        if ( empty( $settings['auto_purge'] ) ) {
+            return;
+        }
+        $providers = $settings['providers'];
         $target = self::target( $providers, self::automaticCdnLayers( $providers ) );
         if ( $target === '' ) {
             return;
@@ -54,7 +58,12 @@ final class YSCacheEnhancePurge {
             if ( empty( $pending['change'] ) || (int) ( $pending['attempt'] ?? 0 ) > count( self::RETRY_DELAYS ) ) {
                 return;
             }
-            $providers = YSCache::settings()['providers'];
+            $settings = YSCache::settings();
+            if ( empty( $settings['auto_purge'] ) ) {
+                YSCacheSettingsRepo::changePurgeRecord( self::PENDING, $pending, null );
+                return;
+            }
+            $providers = $settings['providers'];
             $cdn = self::automaticCdnLayers( $providers );
             if ( self::target( $providers, $cdn ) !== ( $pending['target'] ?? '' ) ) {
                 YSCacheSettingsRepo::changePurgeRecord( self::PENDING, $pending, null );
@@ -98,14 +107,14 @@ final class YSCacheEnhancePurge {
 
     private static function automaticCdnLayers( array $providers ): array {
         return array_values( array_filter( (array) ( $providers['cdn'] ?? [] ), static function ( $layer ): bool {
-            return is_array( $layer ) && ! empty( $layer['enabled'] ) && ! empty( $layer['auto_purge'] );
+            return is_array( $layer ) && ! empty( $layer['enabled'] ) && YSCacheProviders::autoPurgePolicy( $layer ) === 'inherit';
         } ) );
     }
 
     private static function target( array $providers, array $cdn ): string {
         $enhance = $providers['enhance'] ?? [];
         $enhance_enabled = ! empty( $enhance['enabled'] );
-        if ( $cdn === [] && ( ! $enhance_enabled || empty( $enhance['auto_purge'] ) ) ) {
+        if ( $cdn === [] && ! $enhance_enabled ) {
             return '';
         }
         $url = $enhance['url'] ?? '';

@@ -7,7 +7,11 @@ msgstr ""
 "Language: zh_TW\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: templates/admin/settings.php:54
+#: templates/admin/settings.php:284
+msgid "(optional)"
+msgstr "（選填）"
+
+#: templates/admin/settings.php:71
 msgid "API Token / Key"
 msgstr "API Token／金鑰"
 
@@ -23,47 +27,63 @@ msgstr "權限或驗證失效，請重新載入設定頁。"
 msgid "Activate YS CACHE on each site separately."
 msgstr "請在各個站點分別啟用 YS CACHE。"
 
-#: templates/admin/settings.php:287
+#: templates/admin/settings.php:380
 msgid "Activate the optional YS CACHE Import plugin with compatible cache settings on the same site. It detects supported settings automatically and reports the outcome in the Tools menu."
 msgstr "在已有相容快取設定的網站啟用選用的 YS CACHE Import。外掛會自動偵測可匯入的設定，並在「工具」選單顯示處理結果。"
 
-#: templates/admin/settings.php:271
+#: templates/admin/settings.php:362
 msgid "Add CDN layer"
 msgstr "新增 CDN 層"
 
-#: templates/admin/settings.php:257
+#: templates/admin/settings.php:348
 msgid "Added"
 msgstr "已新增"
 
-#: src/Admin/YSCacheAdmin.php:80 templates/admin/settings.php:113
+#: src/Admin/YSCacheAdmin.php:82 templates/admin/settings.php:131
 msgid "Another page cache is active. Disable it before enabling YS CACHE."
 msgstr "偵測到其他頁面快取。啟用 YS CACHE 前請先停用。"
 
-#: templates/admin/settings.php:158
+#: templates/admin/settings.php:24
+msgid "Asset optimization"
+msgstr "資源最佳化"
+
+#: templates/admin/settings.php:29 templates/admin/settings.php:260
 msgid "Automatic detection"
 msgstr "自動偵測"
 
-#: templates/admin/settings.php:22 templates/admin/settings.php:286
+#: templates/admin/settings.php:35 templates/admin/settings.php:379
 msgid "Automatic import"
 msgstr "自動匯入"
 
-#: templates/admin/settings.php:268
-msgid "Before allowing CDN HTML caching, verify bypass rules for cookies, query strings, authorization, and requests other than GET and HEAD. Verified HTML layers automatically purge on content changes."
-msgstr "啟用 CDN HTML 快取前，請確認 Cookie、查詢字串、授權標頭，以及 GET、HEAD 以外的請求會繞過快取。已驗證的 HTML 快取層會於內容變更時自動清除。"
+#: templates/admin/settings.php:184
+msgid "Automatic purge"
+msgstr "自動清除"
 
-#: templates/admin/settings.php:39
+#: templates/admin/settings.php:77
+msgid "Automatic purge policy"
+msgstr "自動清除方式"
+
+#: templates/admin/settings.php:359
+msgid "Before allowing CDN HTML caching, verify bypass rules for cookies, query strings, authorization, and requests other than GET and HEAD."
+msgstr "啟用 CDN HTML 快取前，請確認 Cookie、查詢字串、授權標頭，以及 GET、HEAD 以外的請求會繞過快取。"
+
+#: src/YSCacheProviders.php:426
+msgid "Bunny CDN could not verify an exact purge for this URL. Check its Pull Zone hostname and Ignore Query Strings setting."
+msgstr "Bunny CDN 無法確認這個網址能精確清除。請檢查 Pull Zone 的主機名稱及 Ignore Query Strings 設定。"
+
+#: templates/admin/settings.php:56
 msgid "CDN delivery scope"
 msgstr "CDN 傳遞範圍"
 
-#: templates/admin/settings.php:18 templates/admin/settings.php:30 templates/admin/settings.php:265
+#: templates/admin/settings.php:31 templates/admin/settings.php:44 templates/admin/settings.php:356
 msgid "CDN layers"
 msgstr "CDN 層"
 
-#: templates/admin/settings.php:282
+#: templates/admin/settings.php:375
 msgid "CDN providers"
 msgstr "CDN 供應商"
 
-#: src/YSCacheProviders.php:383
+#: src/YSCacheProviders.php:386
 msgid "CDN purge needs a valid resource ID, credentials, and a hostname for asset-only layers."
 msgstr "清除 CDN 需提供有效的資源 ID 與憑證。僅供靜態檔案的層也需填寫網域。"
 
@@ -71,13 +91,21 @@ msgstr "清除 CDN 需提供有效的資源 ID 與憑證。僅供靜態檔案的
 msgid "CDN resource found. Save the settings to apply this connection."
 msgstr "已找到 CDN 資源。請儲存設定以套用此連線。"
 
-#: src/Admin/YSCacheAdmin.php:34 templates/admin/settings.php:92
+#: templates/admin/settings.php:231
+msgid "CSS exclusions"
+msgstr "CSS 排除"
+
+#: templates/admin/settings.php:223
+msgid "CSS optimization"
+msgstr "CSS 最佳化"
+
+#: src/Admin/YSCacheAdmin.php:34 templates/admin/settings.php:113
 msgid "Cache Management"
 msgstr "快取管理"
 
-#: templates/admin/settings.php:153
-msgid "Cache lifetime (seconds)"
-msgstr "快取時效（秒）"
+#: templates/admin/settings.php:171
+msgid "Cache lifetime"
+msgstr "快取時效"
 
 #: src/Admin/YSCacheAdminBar.php:62
 msgid "Cache purge failed. Reload the page and try again."
@@ -87,11 +115,11 @@ msgstr "快取清除失敗。請重新載入頁面再試一次。"
 msgid "Cache purge finished."
 msgstr "快取清除已完成。"
 
-#: templates/admin/settings.php:11
+#: templates/admin/settings.php:19
 msgid "Cache settings"
 msgstr "快取設定"
 
-#: templates/admin/settings.php:252
+#: templates/admin/settings.php:343
 msgid "Check FastCGI status"
 msgstr "檢查 FastCGI 狀態"
 
@@ -99,15 +127,15 @@ msgstr "檢查 FastCGI 狀態"
 msgid "Check the resource ID, CDN hostname, and Cloudflare email format."
 msgstr "請確認資源 ID、CDN 主機名稱及 Cloudflare 帳號 Email 的格式。"
 
-#: templates/admin/settings.php:157
+#: templates/admin/settings.php:183
 msgid "Choose a lifetime from 1 second through 7 days. Cached HTML can expire sooner when a guest security token is due to change."
 msgstr "時效可設為 1 秒到 7 天。訪客安全權杖即將更新時，HTML 快取可能提早到期。"
 
-#: templates/admin/settings.php:57
+#: templates/admin/settings.php:74
 msgid "Cloudflare account email (Global API Key)"
 msgstr "Cloudflare Global Key 帳號 Email"
 
-#: src/YSCacheProviders.php:475
+#: src/YSCacheProviders.php:506
 msgid "Cloudflare did not accept the purge."
 msgstr "Cloudflare 拒絕清除快取請求。"
 
@@ -115,7 +143,7 @@ msgstr "Cloudflare 拒絕清除快取請求。"
 msgid "Configure the Enhance panel, domain UUID and API token to check FastCGI."
 msgstr "請設定 Enhance 控制面板、網域 UUID 與 API Token，以檢查 FastCGI。"
 
-#: templates/admin/settings.php:21 templates/admin/settings.php:274
+#: templates/admin/settings.php:34 templates/admin/settings.php:365
 msgid "Connection setup"
 msgstr "連線設定"
 
@@ -123,52 +151,56 @@ msgstr "連線設定"
 msgid "Cookies, Authorization, query strings, private/form requests, and language selection require a server-side bypass or cache key rules before the FastCGI cache lookup."
 msgstr "請於 FastCGI 查詢快取前，在伺服器針對 Cookie、Authorization 標頭、查詢字串、私有內容和表單請求、語言選擇設定繞過或快取鍵規則。"
 
-#: templates/admin/settings.php:278
+#: templates/admin/settings.php:371
 msgid "Copy the token and organization ID. Look up the site domain in the website domains endpoint and copy its domain ID. The website ID identifies the parent website."
 msgstr "複製權杖及組織 ID。透過網站網域端點查詢目標網域，並複製該筆網域 ID。網站 ID 是其所屬網站的識別碼。"
 
-#: templates/admin/settings.php:283
+#: templates/admin/settings.php:376
 msgid "Create a credential with access to read the resource and purge its cache. Enter the delivery hostname and use Find resource ID, or enter the resource ID from your provider dashboard."
 msgstr "建立可讀取資源並清除其快取的憑證。輸入傳遞主機名稱後按「查詢資源 ID」，也可填入供應商面板提供的資源 ID。"
 
-#: templates/admin/settings.php:164
+#: templates/admin/settings.php:248
+msgid "Defer JavaScript"
+msgstr "延後執行 JavaScript"
+
+#: templates/admin/settings.php:266
 msgid "Detect OPcache and any Enhance connection preconfigured by the host. Application exclusions remain active."
 msgstr "自動偵測 OPcache 和主機已設好的 Enhance 連線。應用程式排除規則會持續生效。"
 
-#: templates/admin/settings.php:162
+#: templates/admin/settings.php:264
 msgid "Detect compatible server integrations"
 msgstr "自動偵測相容的伺服器整合"
 
-#: templates/admin/settings.php:166
+#: templates/admin/settings.php:288
 msgid "Detected application integrations"
 msgstr "已偵測的應用程式整合"
 
-#: templates/admin/settings.php:180
+#: templates/admin/settings.php:198
 #, php-format
 msgid "Detected form plugins (%s). Pages with supported forms are automatically excluded."
 msgstr "已偵測表單外掛 %s。表單頁會套用自動排除。"
 
-#: templates/admin/settings.php:239
+#: templates/admin/settings.php:330
 msgid "Domain ID"
 msgstr "網域 ID"
 
-#: templates/admin/settings.php:62
+#: templates/admin/settings.php:85
 msgid "Enable API purging"
 msgstr "啟用 API 清除"
 
-#: templates/admin/settings.php:207
+#: templates/admin/settings.php:299
 msgid "Enable Enhance Nginx purging"
 msgstr "啟用 Enhance Nginx 清除"
 
-#: templates/admin/settings.php:150
+#: templates/admin/settings.php:168
 msgid "Enable guest HTML caching when using YS CACHE"
 msgstr "使用 YS CACHE 時，啟用訪客 HTML 快取"
 
-#: templates/admin/settings.php:245
+#: templates/admin/settings.php:336
 msgid "Enhance API Token"
 msgstr "Enhance API Token"
 
-#: templates/admin/settings.php:281
+#: templates/admin/settings.php:374
 msgid "Enhance API reference"
 msgstr "Enhance API 參考文件"
 
@@ -180,39 +212,47 @@ msgstr "Enhance FastCGI 快取已停用。"
 msgid "Enhance FastCGI cache is enabled."
 msgstr "Enhance FastCGI 快取已啟用。"
 
-#: templates/admin/settings.php:281
+#: templates/admin/settings.php:374
 msgid "Enhance FastCGI documentation"
 msgstr "Enhance FastCGI 說明"
 
-#: templates/admin/settings.php:256
+#: templates/admin/settings.php:347
 msgid "Enhance FastCGI is disabled."
 msgstr "Enhance FastCGI 目前已停用。"
 
-#: templates/admin/settings.php:256
+#: templates/admin/settings.php:347
 msgid "Enhance FastCGI is enabled. Verify the Nginx bypass rules before enabling HTML integration."
 msgstr "偵測到 Enhance FastCGI 已啟用。驗證 Nginx 排除後即可啟用 HTML 整合。"
 
-#: src/YSCache.php:226
+#: src/YSCache.php:233
 msgid "Enhance FastCGI supports entire-site purges. Use Purge entire site."
 msgstr "Enhance FastCGI 支援全站清除。請使用「清除全站快取」。"
 
-#: templates/admin/settings.php:249
+#: templates/admin/settings.php:340
 msgid "Enhance HTML integration"
 msgstr "Enhance HTML 整合"
 
-#: templates/admin/settings.php:236
+#: templates/admin/settings.php:269
+msgid "Enhance and CDN"
+msgstr "Enhance 與 CDN"
+
+#: templates/admin/settings.php:190
+msgid "Enhance and enabled CDN integrations follow this setting. CDN layers set to Manual only are cleared through manual purge actions."
+msgstr "Enhance 和已啟用的 CDN 整合會依此設定執行。設為「僅手動清除」的 CDN 層需透過手動清除。"
+
+#: templates/admin/settings.php:327
 msgid "Enhance control panel URL"
 msgstr "Enhance 控制面板 URL"
 
-#: src/YSCache.php:190
+#: src/YSCache.php:197
 msgid "Enhance is the HTML cache owner."
 msgstr "HTML 快取由 Enhance 管理。"
 
-#: templates/admin/settings.php:141
+#: templates/admin/settings.php:159
 msgid "Enhance manages the HTML cache."
 msgstr "目前由 Enhance 提供 HTML 快取。"
 
-#: src/YSCacheProviders.php:180
+#: src/YSCacheProviders.php:183
 msgid "Enhance purge is disabled."
 msgstr "Enhance 清除功能已停用。"
 
@@ -220,7 +260,11 @@ msgstr "Enhance 清除功能已停用。"
 msgid "Enhance received exclusion requests. Their final state could not be verified."
 msgstr "Enhance 已收到排除規則變更請求，目前無法確認套用結果。"
 
-#: src/YSCache.php:208
+#: templates/admin/settings.php:175
+msgid "Enter a lifetime of 1 second to 7 days that converts to whole seconds."
+msgstr "請輸入 1 秒到 7 天的時效，換算後須為整數秒。"
+
+#: src/YSCache.php:215
 msgid "Enter a public page URL on this site without a query string or fragment."
 msgstr "請輸入本網站的公開頁面網址，省略查詢字串及片段。"
 
@@ -228,11 +272,15 @@ msgstr "請輸入本網站的公開頁面網址，省略查詢字串及片段。
 msgid "Enter a valid URL on this site."
 msgstr "請輸入本站的有效網址。"
 
-#: src/YSCacheProviders.php:332
+#: src/YSCacheProviders.php:335
 msgid "Enter an HTTPS control panel URL, a domain UUID, and an API token."
 msgstr "請輸入 HTTPS 控制面板網址、網域 UUID 及 API Token。"
 
-#: templates/admin/settings.php:186
+#: templates/admin/settings.php:235
+msgid "Enter one asset handle or path per line. Use * as a wildcard in paths."
+msgstr "每行輸入一個資源識別代碼或路徑。路徑可使用萬用字元 *。"
+
+#: templates/admin/settings.php:204
 msgid "Enter one rule per line. Path rules support * wildcards. Cookie rules match name prefixes, and User-Agent rules match substrings."
 msgstr "每行一條規則。路徑可使用 *，Cookie 比對名稱前綴，User-Agent 比對片段。"
 
@@ -240,7 +288,7 @@ msgstr "每行一條規則。路徑可使用 *，Cookie 比對名稱前綴，Use
 msgid "Enter the CDN delivery hostname or the resource ID."
 msgstr "請輸入 CDN 傳遞主機名稱或資源 ID。"
 
-#: templates/admin/settings.php:279
+#: templates/admin/settings.php:372
 msgid "Enter the HTTPS panel URL, domain ID, organization ID, and token in the Enhance tab. Check FastCGI status before enabling HTML integration."
 msgstr "在 Enhance 頁籤輸入 HTTPS 控制面板網址、網域 ID、組織 ID 和權杖。請先檢查 FastCGI 狀態，再啟用 HTML 整合。"
 
@@ -256,35 +304,43 @@ msgstr "請輸入圖片 CDN 的傳遞主機名稱。"
 msgid "Enter the provider API credential to look up this resource."
 msgstr "請輸入供應商的 API 憑證以查詢資源。"
 
-#: templates/admin/settings.php:41
+#: templates/admin/settings.php:58
 msgid "Entire site"
 msgstr "全站"
 
-#: templates/admin/settings.php:13 templates/admin/settings.php:175
+#: templates/admin/settings.php:21 templates/admin/settings.php:193
 msgid "Exclusions"
 msgstr "排除"
 
-#: templates/admin/settings.php:216
+#: templates/admin/settings.php:307
 msgid "Failed"
 msgstr "失敗"
 
-#: templates/admin/settings.php:73
+#: templates/admin/settings.php:95
 msgid "Find resource ID"
 msgstr "查詢資源 ID"
 
-#: templates/admin/settings.php:12 templates/admin/settings.php:103 templates/admin/settings.php:137
+#: templates/admin/settings.php:79
+msgid "Follow site settings"
+msgstr "依全站設定"
+
+#: templates/admin/settings.php:368
+msgid "For hosting administrators"
+msgstr "主機管理員設定步驟"
+
+#: templates/admin/settings.php:20 templates/admin/settings.php:155
 msgid "HTML cache"
 msgstr "HTML 快取"
 
-#: src/YSCache.php:190
+#: src/YSCache.php:197
 msgid "HTML cache cleared."
 msgstr "已清除 HTML 快取。"
 
-#: templates/admin/settings.php:143
+#: templates/admin/settings.php:161
 msgid "HTML caching is disabled."
 msgstr "HTML 快取已停用。"
 
-#: templates/admin/settings.php:42
+#: templates/admin/settings.php:59
 msgid "HTML only"
 msgstr "僅 HTML"
 
@@ -292,88 +348,120 @@ msgstr "僅 HTML"
 msgid "HTML page cache and layered cache purging for WordPress."
 msgstr "WordPress HTML 頁面快取與多層快取清除。"
 
-#: templates/admin/settings.php:45
+#: templates/admin/settings.php:62
 msgid "HTML, JavaScript, and CSS"
 msgstr "HTML、JavaScript、CSS"
 
-#: templates/admin/settings.php:20
+#: templates/admin/settings.php:33
 msgid "Help"
 msgstr "說明"
 
-#: templates/admin/settings.php:48
+#: templates/admin/settings.php:272
+msgid "Host-managed Enhance configuration"
+msgstr "由主機商配置 Enhance"
+
+#: templates/admin/settings.php:65
 msgid "Hostname"
 msgstr "主機名稱"
 
-#: templates/admin/settings.php:260
+#: templates/admin/settings.php:351
 msgid "I verified that Nginx bypasses the cache for stateful requests."
 msgstr "已驗證 Nginx 讀取快取前會排除有狀態的請求"
 
-#: templates/admin/settings.php:64
+#: templates/admin/settings.php:86
 msgid "I verified the CDN bypass rules for stateful requests."
 msgstr "我已確認 CDN 會對有狀態的請求套用快取排除。"
 
-#: templates/admin/settings.php:277
-msgid "In your Enhance organization, open Settings, then Access Tokens. Create a token with permission to read the site domain and manage its FastCGI cache. Set an expiration date and IP restrictions where available."
-msgstr "在 Enhance 組織中開啟「Settings → Access Tokens」。建立可讀取網站網域並管理 FastCGI 快取的權杖。如有選項，請指定到期日和允許的 IP。"
+#: templates/admin/settings.php:367
+msgid "If your hosting provider manages Enhance, ask them to provision the connection for this site. API token creation is handled by a hosting or control-panel administrator."
+msgstr "若 Enhance 由主機商管理，請聯絡主機商替本站配置連線。API 權杖由主機或控制面板管理員建立。"
 
-#: templates/admin/settings.php:16
+#: templates/admin/settings.php:370
+msgid "In the appropriate Enhance organization, open Settings, then Access Tokens. Create a token with permission to read this site’s domain and manage its FastCGI cache. Set an expiration date and IP restrictions where available."
+msgstr "在對應的 Enhance 組織中開啟「Settings → Access Tokens」。建立可讀取本站網域並管理 FastCGI 快取的權杖。如有選項，請指定到期日和允許的 IP。"
+
+#: templates/admin/settings.php:28
 msgid "Integrations"
 msgstr "整合"
 
-#: src/Admin/YSCacheAdmin.php:141
+#: src/Admin/YSCacheAdmin.php:152
 msgid "Invalid Enhance operation."
 msgstr "Enhance 操作無效。"
 
-#: src/Admin/YSCacheAdmin.php:160 src/Admin/YSCacheAdminBar.php:115
+#: src/Admin/YSCacheAdmin.php:171 src/Admin/YSCacheAdminBar.php:115
 msgid "Invalid purge scope."
 msgstr "清除範圍無效。"
 
-#: src/Admin/YSCacheAdmin.php:116
+#: src/Admin/YSCacheAdmin.php:123
 msgid "Invalid settings format."
 msgstr "設定格式無效。"
 
-#: templates/admin/settings.php:43
+#: templates/admin/settings.php:60
 msgid "JavaScript and CSS"
 msgstr "JavaScript、CSS"
 
-#: templates/admin/settings.php:67
+#: templates/admin/settings.php:253
+msgid "JavaScript exclusions"
+msgstr "JavaScript 排除"
+
+#: templates/admin/settings.php:238
+msgid "JavaScript optimization"
+msgstr "JavaScript 最佳化"
+
+#: templates/admin/settings.php:89
 msgid "Keep legacy Media Library image rewriting"
 msgstr "保留既有媒體庫圖片改寫"
 
-#: templates/admin/settings.php:222
+#: templates/admin/settings.php:313
 #, php-format
 msgid "Last automatic purge: %1$s (%2$s)"
 msgstr "上次自動清除 %1$s（%2$s）"
 
-#: templates/admin/settings.php:93
+#: templates/admin/settings.php:268
+msgid "Local HTML and OPcache"
+msgstr "本機 HTML 與 OPcache"
+
+#: templates/admin/settings.php:114
 msgid "Manage HTML caching, exclusions, and purge integrations for this site."
 msgstr "管理本站的 HTML 快取、排除規則與多層快取清除。"
 
-#: templates/admin/settings.php:185
+#: templates/admin/settings.php:203
 msgid "Manual exclusions"
 msgstr "手動排除"
 
-#: templates/admin/settings.php:100
-msgid "More purge options"
-msgstr "更多清除範圍"
+#: templates/admin/settings.php:80
+msgid "Manual only"
+msgstr "僅手動清除"
+
+#: templates/admin/settings.php:227
+msgid "Minify CSS"
+msgstr "壓縮 CSS"
+
+#: templates/admin/settings.php:243
+msgid "Minify JavaScript"
+msgstr "壓縮 JavaScript"
+
+#: templates/admin/settings.php:251
+msgid "Minify reduces eligible local script size. Defer lets compatible scripts run after the browser parses the page."
+msgstr "壓縮會縮小符合條件的本機指令碼。延後執行可讓相容的指令碼在瀏覽器解析頁面後執行。"
 
 #: src/YSCacheCdnDiscovery.php:277
 msgid "More than one CDN resource matches. Choose the resource in the provider dashboard and enter its ID."
 msgstr "找到多個相符的 CDN 資源。請在供應商控制面板選取資源後輸入 ID。"
 
-#: templates/admin/settings.php:75
+#: templates/admin/settings.php:97
 msgid "Move down"
 msgstr "下移"
 
-#: templates/admin/settings.php:74
+#: templates/admin/settings.php:96
 msgid "Move up"
 msgstr "上移"
 
-#: src/YSCacheProviders.php:205
+#: src/YSCacheProviders.php:208
 msgid "No CDN purge integrations are enabled."
 msgstr "目前未啟用任何 CDN 清除整合。"
 
-#: src/YSCacheProviders.php:378
+#: src/YSCacheProviders.php:381
 msgid "No URLs apply to this CDN layer."
 msgstr "沒有適用於此 CDN 層的網址。"
 
@@ -381,60 +469,68 @@ msgstr "沒有適用於此 CDN 層的網址。"
 msgid "No matching active CDN resource was found. Check the hostname, resource ID, and credential scope."
 msgstr "找不到相符的啟用中 CDN 資源。請確認主機名稱、資源 ID 和憑證權限範圍。"
 
-#: templates/admin/settings.php:8
+#: templates/admin/settings.php:9
 msgid "Not configured"
 msgstr "尚未設定"
 
-#: src/YSCacheProviders.php:165
+#: src/YSCacheProviders.php:168
 msgid "OPcache reset is unavailable in this PHP runtime."
 msgstr "目前的 PHP 執行環境無法重設 OPcache。"
 
-#: templates/admin/settings.php:197
+#: templates/admin/settings.php:215
 msgid "OPcache stores compiled PHP on the origin server. Enable this option to reset it before a full-site purge."
 msgstr "OPcache 將編譯後的 PHP 保留在來源伺服器。啟用後，清除全站時會先重設 OPcache。"
 
-#: templates/admin/settings.php:266
-msgid "Order layers from origin to edge. Enable automatic purging for every CDN in the same delivery chain."
-msgstr "按來源到外層排序。同一傳遞鏈上的 CDN 請一起啟用自動清除。"
+#: templates/admin/settings.php:357
+msgid "Order layers from origin to edge. Each enabled CDN layer can follow the site’s automatic purge setting or be set to manual only."
+msgstr "請由來源往外層排序。已啟用的 CDN 層可依全站自動清除設定執行，也可設為僅手動清除。"
 
-#: templates/admin/settings.php:242
+#: templates/admin/settings.php:333
 msgid "Organization ID (optional)"
 msgstr "Organisation ID（選填）"
 
-#: templates/admin/settings.php:188
+#: templates/admin/settings.php:206
 msgid "Paths"
 msgstr "路徑"
 
-#: templates/admin/settings.php:253
+#: templates/admin/settings.php:344
 msgid "Preview exclusions for saved settings"
 msgstr "預覽已儲存設定的排除路徑"
 
-#: templates/admin/settings.php:32
+#: templates/admin/settings.php:49
 msgid "Provider"
 msgstr "供應商"
 
-#: templates/admin/settings.php:208
-msgid "Purge Enhance automatically when content changes"
-msgstr "內容變更後自動清除 Enhance"
+#: templates/admin/settings.php:121
+msgid "Purge CDN"
+msgstr "清除 CDN 快取"
 
-#: templates/admin/settings.php:63
-msgid "Purge automatically when content changes"
-msgstr "內容更新時自動清除"
+#: templates/admin/settings.php:121
+msgid "Purge Enhance Nginx"
+msgstr "清除 Enhance Nginx 快取"
 
-#: src/Admin/YSCacheAdminBar.php:30
+#: templates/admin/settings.php:121
+msgid "Purge HTML cache"
+msgstr "清除 HTML 快取"
+
+#: src/Admin/YSCacheAdminBar.php:30 templates/admin/settings.php:118
 msgid "Purge cache"
 msgstr "清除快取"
 
-#: src/Admin/YSCacheAdminBar.php:42 templates/admin/settings.php:96
+#: templates/admin/settings.php:188
+msgid "Purge caches when published content changes"
+msgstr "公開內容變更後自動清除快取"
+
+#: src/Admin/YSCacheAdminBar.php:42 templates/admin/settings.php:120
 msgid "Purge entire site"
 msgstr "清除全站快取"
 
-#: src/YSCacheProviders.php:470
+#: src/YSCacheProviders.php:501
 #, php-format
 msgid "Purge returned HTTP %d."
 msgstr "清除快取請求傳回 HTTP %d。"
 
-#: templates/admin/settings.php:69
+#: templates/admin/settings.php:91
 msgid "Purge the entire Cloudflare zone"
 msgstr "清除整個 Cloudflare Zone"
 
@@ -446,35 +542,47 @@ msgstr "清除此頁快取"
 msgid "Purging cache…"
 msgstr "正在清除快取…"
 
-#: templates/admin/settings.php:257
+#: templates/admin/settings.php:348
 msgid "Ready to sync"
 msgstr "待同步"
 
-#: templates/admin/settings.php:209
+#: templates/admin/settings.php:229
+msgid "Reduce the size of eligible local stylesheets."
+msgstr "縮小符合條件的本機樣式表檔案。"
+
+#: templates/admin/settings.php:45 templates/admin/settings.php:45
+msgid "Remove CDN layer"
+msgstr "移除 CDN 層"
+
+#: templates/admin/settings.php:300
 msgid "Remove Enhance token"
 msgstr "移除 Enhance Token"
 
-#: templates/admin/settings.php:76
-msgid "Remove layer"
-msgstr "移除此層"
-
-#: templates/admin/settings.php:70
+#: templates/admin/settings.php:92
 msgid "Remove stored credential"
 msgstr "移除儲存的憑證"
 
-#: templates/admin/settings.php:201
+#: templates/admin/settings.php:107
+msgid "Remove this CDN layer? The change will apply when you save your settings."
+msgstr "要移除這個 CDN 層嗎？儲存設定後才會套用變更。"
+
+#: templates/admin/settings.php:121
+msgid "Reset OPcache"
+msgstr "重設 OPcache"
+
+#: templates/admin/settings.php:219
 msgid "Reset OPcache when purging all layers"
 msgstr "全層清除時重設 OPcache"
 
-#: templates/admin/settings.php:65
+#: templates/admin/settings.php:87
 msgid "Rewrite public asset URLs to this CDN hostname"
 msgstr "將公開資源網址改寫至此 CDN 主機名稱"
 
-#: templates/admin/settings.php:290
+#: templates/admin/settings.php:383
 msgid "Save settings"
 msgstr "儲存設定"
 
-#: templates/admin/settings.php:9
+#: templates/admin/settings.php:10
 msgid "Saved. Leave blank to keep it."
 msgstr "已設定，留空保留"
 
@@ -486,11 +594,11 @@ msgstr "請選擇 Cloudflare、Bunny CDN 或 Gcore 查詢既有資源。"
 msgid "Settings"
 msgstr "設定"
 
-#: src/Admin/YSCacheAdmin.php:105
+#: src/Admin/YSCacheAdmin.php:112
 msgid "Settings saved. The existing YS CACHE HTML cache was invalidated."
 msgstr "設定已儲存，原有 YS CACHE HTML 快取已失效。"
 
-#: templates/admin/settings.php:119
+#: templates/admin/settings.php:137
 msgid "Settings sections"
 msgstr "設定分類"
 
@@ -498,19 +606,19 @@ msgstr "設定分類"
 msgid "Some suggested paths are still missing. Review the remaining paths before using FastCGI as the HTML cache."
 msgstr "仍有部分建議路徑尚未加入。使用 FastCGI 快取 HTML 前，請檢查剩餘路徑。"
 
-#: templates/admin/settings.php:44
+#: templates/admin/settings.php:61
 msgid "Static assets (JavaScript, CSS, images, and more)"
 msgstr "JavaScript、CSS、圖片等靜態資源"
 
-#: templates/admin/settings.php:214
+#: templates/admin/settings.php:305
 msgid "Succeeded"
 msgstr "成功"
 
-#: templates/admin/settings.php:262
+#: templates/admin/settings.php:353
 msgid "Sync known storefront and translated paths. Verify that Nginx also handles cookies outside the allowlist, authorization headers, query strings, methods other than GET and HEAD, forms, and request-dependent languages."
 msgstr "可同步購物及多語系的已知路徑。請在 Nginx 另驗證所有未列入白名單的 Cookie、授權標頭、query string、非 GET / HEAD 方法、表單及依請求變動的語系。"
 
-#: templates/admin/settings.php:254
+#: templates/admin/settings.php:345
 msgid "Sync suggested exclusions"
 msgstr "同步建議排除"
 
@@ -534,27 +642,27 @@ msgstr "CDN API 拒絕查詢。"
 msgid "The CDN API returned an unrecognized response."
 msgstr "CDN API 傳回無法辨識的回應。"
 
-#: src/Admin/YSCacheAdmin.php:90
+#: src/Admin/YSCacheAdmin.php:92
 msgid "The Enhance API must confirm that FastCGI is enabled for this domain before Enhance can manage the HTML cache."
 msgstr "Enhance API 必須確認這個網域已啟用 FastCGI，才能交由 Enhance 提供 HTML 快取。"
 
-#: templates/admin/settings.php:116
+#: templates/admin/settings.php:134
 msgid "The HTML cache directory is not writable. Set YS_CACHE_STORAGE_ROOT to a directory outside the site root."
 msgstr "HTML 快取目錄無法寫入。請設定網站目錄外的 YS_CACHE_STORAGE_ROOT。"
 
-#: src/YSCache.php:189
+#: src/YSCache.php:196
 msgid "The cache generation could not be updated."
 msgstr "無法更新快取版本。"
 
-#: src/YSCache.php:216
+#: src/YSCache.php:223
 msgid "The local HTML cache is disabled."
 msgstr "本機 HTML 快取已停用。"
 
-#: src/YSCache.php:217
+#: src/YSCache.php:224
 msgid "The page cache generation could not be updated."
 msgstr "無法更新此頁的快取版本。"
 
-#: src/YSCacheProviders.php:478
+#: src/YSCacheProviders.php:509
 msgid "The provider accepted the purge."
 msgstr "供應商已接受清除快取請求。"
 
@@ -562,11 +670,11 @@ msgstr "供應商已接受清除快取請求。"
 msgid "The provider has too many resources to look up automatically. Enter the resource ID and verify it directly."
 msgstr "供應商的資源過多，無法自動查詢。請輸入資源 ID 直接驗證。"
 
-#: src/YSCacheProviders.php:464
+#: src/YSCacheProviders.php:495
 msgid "The purge request could not reach the provider."
 msgstr "清除快取請求無法連線至供應商。"
 
-#: templates/admin/settings.php:85
+#: templates/admin/settings.php:106
 msgid "The request failed. Try again."
 msgstr "操作失敗，請重試。"
 
@@ -574,24 +682,40 @@ msgstr "操作失敗，請重試。"
 msgid "The suggested paths are present in Enhance. Existing exclusions were preserved."
 msgstr "建議路徑皆已設在 Enhance，原有的排除規則也已保留。"
 
-#: src/YSCacheProviders.php:164
+#: templates/admin/settings.php:257
+msgid "These exclusions apply to both options. Enter one asset handle or path per line. Use * as a wildcard in paths."
+msgstr "兩種選項共用排除規則。每行輸入一個資源識別代碼或路徑。路徑可使用萬用字元 *。"
+
+#: templates/admin/settings.php:268
+msgid "These layers can be purged without API credentials."
+msgstr "清除這些層無需 API 憑證。"
+
+#: templates/admin/settings.php:269
+msgid "These services use provider API credentials. Ask your host to provision Enhance for this site. Enhance purging is available after the connection is configured."
+msgstr "這些服務需要供應商 API 憑證。請聯絡主機商替本站配置 Enhance。完成連線後即可清除 Enhance 快取。"
+
+#: src/YSCacheProviders.php:167
 msgid "This PHP runtime accepted the OPcache reset."
 msgstr "目前的 PHP 執行環境已接受 OPcache 重設請求。"
 
-#: src/YSCacheProviders.php:387
+#: src/YSCacheProviders.php:390
 #, php-format
 msgid "This layer supports up to %d URLs per purge. Submit smaller batches."
 msgstr "此層每次最多可清除 %d 個網址。請分批提交。"
 
-#: src/YSCache.php:216
+#: src/YSCache.php:223
 msgid "This page’s HTML cache was cleared."
 msgstr "已清除此頁的 HTML 快取。"
 
-#: templates/admin/settings.php:267
+#: templates/admin/settings.php:176
+msgid "Time unit"
+msgstr "時間單位"
+
+#: templates/admin/settings.php:358
 msgid "To deliver HTML through a CDN, route the site’s canonical hostname through the provider in DNS. For static files, enter a dedicated CDN hostname and enable URL rewriting. Signed, private, and logged-in asset URLs keep their original host."
 msgstr "將網站主要網域的 DNS 指向 CDN，HTML 才會透過該服務傳遞。靜態檔案使用專屬 CDN 主機名稱並啟用網址改寫。具簽章、私人或登入後的資源保留原網址。"
 
-#: src/YSCacheProviders.php:456
+#: src/YSCacheProviders.php:487
 msgid "Unable to encode the purge request."
 msgstr "無法編碼清除快取請求。"
 
@@ -599,7 +723,7 @@ msgstr "無法編碼清除快取請求。"
 msgid "Unable to read the existing Enhance cache exclusions."
 msgstr "無法讀取 Enhance 目前的快取排除規則。"
 
-#: src/Admin/YSCacheAdmin.php:95
+#: src/Admin/YSCacheAdmin.php:97
 msgid "Unable to save settings. Check database table and cache directory permissions."
 msgstr "儲存失敗，請確認資料表與快取目錄權限。"
 
@@ -607,42 +731,47 @@ msgstr "儲存失敗，請確認資料表與快取目錄權限。"
 msgid "Unable to verify FastCGI status from Enhance."
 msgstr "無法從 Enhance 確認 FastCGI 狀態。"
 
-#: src/YSCache.php:227
+#: src/YSCache.php:234
 msgid "Unable to verify whether Enhance FastCGI is active. CDN purge was paused."
 msgstr "無法確認 Enhance FastCGI 是否啟用。已暫停清除 CDN 快取。"
 
-#: src/YSCacheProviders.php:371
+#: src/YSCacheProviders.php:374
 msgid "Unknown CDN provider."
 msgstr "無法辨識 CDN 供應商。"
 
-#: templates/admin/settings.php:259
+#: templates/admin/settings.php:350
 msgid "Use Enhance for HTML caching"
 msgstr "由 Enhance 提供 HTML 快取"
 
-#: templates/admin/settings.php:250
-msgid "Use Enhance to cache HTML. YS CACHE stops using local HTML files and purges FastCGI when content changes."
-msgstr "交由 Enhance 產生 HTML 快取。YS CACHE 會停止讀寫本機 HTML 檔案，並在內容更新時清除 FastCGI。"
+#: templates/admin/settings.php:341
+msgid "Use Enhance to cache HTML. YS CACHE stops using local HTML files. Enhance follows the site’s automatic purge setting."
+msgstr "由 Enhance 快取 HTML。YS CACHE 會停止使用本機 HTML 檔案。Enhance 依全站的自動清除設定執行。"
 
 #: src/YSCacheEnhanceIntegration.php:200
 msgid "Verify route descendants, translated aliases, non-ASCII paths, and wildcard rules in Nginx separately."
 msgstr "請另在 Nginx 確認子路徑、翻譯網址別名、非 ASCII 路徑和萬用字元規則。"
 
-#: src/Admin/YSCacheAdmin.php:85
+#: src/Admin/YSCacheAdmin.php:87
 msgid "Verify that Nginx bypasses its cache before looking up login, cart, form, and other stateful requests."
 msgstr "請先驗證 Nginx 在讀取快取前會排除登入、購物車、表單及其他有狀態的請求。"
 
-#: templates/admin/settings.php:215
+#: templates/admin/settings.php:306
 msgid "Waiting to retry"
 msgstr "等待重試"
 
-#: templates/admin/settings.php:288
+#: templates/admin/settings.php:381
 msgid "YS CACHE installation and downloads"
 msgstr "YS CACHE 安裝說明與下載"
 
-#: templates/admin/settings.php:142
+#: templates/admin/settings.php:160
 msgid "YS CACHE manages the HTML cache."
 msgstr "目前使用 YS CACHE 的 HTML 快取設定。"
 
-#: templates/admin/settings.php:51
+#: templates/admin/settings.php:276
+#, php-format
+msgid "Your host can set these constants in %s for this site. You can also enter the credentials in the Enhance tab."
+msgstr "主機商可在本站的 %s 設定這些常數。也可在 Enhance 頁籤輸入已取得的憑證。"
+
+#: templates/admin/settings.php:68
 msgid "Zone / Resource ID"
 msgstr "區域／資源 ID"

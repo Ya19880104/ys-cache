@@ -41,6 +41,9 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     function home_url() { return 'http://' . $_SERVER['SERVER_NAME'] . ':' . $_SERVER['SERVER_PORT']; }
     function wp_get_upload_dir() { return [ 'baseurl' => home_url() . '/wp-content/uploads' ]; }
     function wp_generate_uuid4() { return bin2hex( random_bytes( 16 ) ); }
+    function wp_json_encode( $value ) { return json_encode( $value ); }
+    function wp_check_invalid_utf8( $value ) { return $value; }
+    function wp_strip_all_tags( $value ) { return strip_tags( $value ); }
     function __( $message, $domain = '' ) { return $message; }
 
     $path = parse_url( $_SERVER['REQUEST_URI'], PHP_URL_PATH );
@@ -58,7 +61,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
             }
             $edge = str_starts_with( $this->path, '/edge' );
             $local = $edge || str_starts_with( $this->path, '/local' ) || str_ends_with( $this->path, '-purge/' );
-            return json_encode( [ 'enabled' => true, 'ttl' => 3, 'exclude_paths' => '/protected/', 'providers' => [
+            return json_encode( [ 'enabled' => true, 'ttl' => 3, 'auto_purge' => $this->path !== '/auto-off-purge/', 'exclude_paths' => '/protected/', 'providers' => [
                 'enhance' => [ 'enabled' => ! $local, 'delegate_html' => ! $local, 'rules_verified' => $this->path !== '/unverified/' ],
                 'opcache' => [ 'enabled' => false ],
                 'cdn' => $edge ? [[ 'provider' => 'cloudflare', 'enabled' => true, 'scope' => $this->path === '/edge-static/' ? 'static' : 'html',
@@ -84,12 +87,22 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         public function query( string $query ): int { return 0; }
     };
 
-    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
+    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
         require ABSPATH . 'src/' . $class . '.php';
     }
     $cache = YangSheep\Cache\YSCache::instance();
     if ( $_SERVER['REQUEST_METHOD'] === 'POST' && str_ends_with( $path, '-purge/' ) ) {
         header( 'Content-Type: application/json' );
+        if ( $path === '/settings-roundtrip-purge/' ) {
+            $saved = $cache::save( [ 'ttl_seconds' => 61, 'ttl_unit' => 'min', 'auto_purge' => false ] );
+            echo json_encode( [ 'saved' => $saved ] + array_intersect_key( $cache::settings(), array_flip( [ 'ttl_seconds', 'ttl_unit', 'auto_purge' ] ) ) );
+            return;
+        }
+        if ( str_starts_with( $path, '/auto-' ) ) {
+            $cache->invalidateOnChange();
+            echo json_encode( [ 'generation' => YangSheep\Cache\Database\YSCacheSettingsRepo::generation() ] );
+            return;
+        }
         $results = $path === '/site-purge/' ? $cache::purge( 'all' ) : $cache::purgePage( home_url() . '/local' );
         echo json_encode( $results );
         return;
@@ -212,6 +225,14 @@ try {
     check( $headers['x-ys-cache'] ?? '', 'MISS', 'Page purge invalidates the slash variant of the target' );
     [ , $headers ] = request( $address, '/local-other/' );
     check( $headers['x-ys-cache'] ?? '', 'HIT', 'Page purge preserves the unrelated warm page' );
+    [ $offGeneration ] = request( $address, '/auto-off-purge/', [], 'POST' );
+    check( json_decode( $offGeneration, true )['generation'] ?? '', '1', 'Master off preserves local files on content edits' );
+    [ , $headers ] = request( $address, '/local-other/' );
+    check( $headers['x-ys-cache'] ?? '', 'HIT', 'A content edit leaves HTML intact when automatic purge is off' );
+    [ $onGeneration ] = request( $address, '/auto-on-purge/', [], 'POST' );
+    check( json_decode( $onGeneration, true )['generation'] !== '1', true, 'Master on invalidates local HTML on content edits' );
+    [ , $headers ] = request( $address, '/local-other/' );
+    check( $headers['x-ys-cache'] ?? '', 'MISS', 'Content edits invalidate HTML when automatic purge is on' );
     [ $results ] = request( $address, '/site-purge/', [], 'POST' );
     check( json_decode( $results, true )[0]['status'] ?? '', 'ok', 'Whole-site purge succeeded' );
     foreach ( [ '/local/', '/local-other/' ] as $path ) {
@@ -229,6 +250,8 @@ try {
         [ , $headers ] = request( $address, $path, $sent );
         check( str_contains( $headers['cache-control'] ?? '', 'no-store' ), true, 'Ineligible edge HTML remains private for ' . $path );
     }
+    [ $roundtrip ] = request( $address, '/settings-roundtrip-purge/', [], 'POST' );
+    check( json_decode( $roundtrip, true ), [ 'saved' => true, 'ttl_seconds' => 61, 'ttl_unit' => 'min', 'auto_purge' => false ], 'Store an exact lifetime, display unit, and master auto purge choice' );
 } catch ( Throwable $error ) {
     fwrite( STDERR, $error->getMessage() . "\n" . (string) @file_get_contents( $log ) );
     $failure = true;

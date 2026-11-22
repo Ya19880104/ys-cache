@@ -40,7 +40,7 @@ function wp_kses_uri_attributes() { return ['href','src']; }
 function esc_attr($text) { return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function esc_url($text) { return esc_attr($text); }
 function sanitize_email($text) { return filter_var($text, FILTER_VALIDATE_EMAIL) ?: ''; }
-function wp_parse_url($url) { return parse_url($url); }
+function wp_parse_url($url, $component = -1) { return parse_url($url, $component); }
 function wp_get_upload_dir() { return ['baseurl' => 'https://dev.example.com/wp-content/uploads']; }
 function home_url($path) { return 'https://dev.example.com' . $path; }
 function content_url($path) { return 'https://dev.example.com/wp-content' . $path; }
@@ -50,7 +50,7 @@ function wp_safe_remote_request($url, $args) {
     $status = str_contains($url, 'gcore.com') ? 201 : (str_ends_with($url, '/purgeCache') ? 204 : 200);
     return [
         'status' => $GLOBALS['http_status'][$url] ?? $status,
-        'body' => str_contains($url, 'cloudflare.com') ? ($GLOBALS['cloudflare_reply'] ?? '{"success":true}') : '',
+        'body' => str_contains($url, 'cloudflare.com') ? ($GLOBALS['cloudflare_reply'] ?? '{"success":true}') : ($GLOBALS['bunny_zone'][$url] ?? ''),
         'content_type' => $GLOBALS['response_type'] ?? 'application/json',
     ];
 }
@@ -174,15 +174,16 @@ unset($GLOBALS['http_status']);
 $auto = Providers::sanitize([
     'enhance' => ['enabled' => true, 'delegate_html' => true, 'rules_verified' => true],
     'cdn' => [
-        ['provider' => 'bunny', 'enabled' => true, 'auto_purge' => true],
-        ['provider' => 'gcore', 'enabled' => false, 'auto_purge' => true, 'zone_id' => '2'],
+        ['provider' => 'bunny', 'enabled' => true],
+        ['provider' => 'gcore', 'enabled' => false, 'auto_purge' => 'off', 'zone_id' => '2'],
         ['provider' => 'cname', 'enabled' => true, 'auto_purge' => true, 'hostname' => 'static.example.com'],
     ],
 ]);
 check($auto['enhance']['delegate_html'], true, 'Delegated HTML flag is stored');
-check($auto['enhance']['auto_purge'], true, 'Delegated HTML implies automatic Enhance purge');
+check(isset($auto['enhance']['auto_purge']), false, 'Enhance inherits the site setting');
 check($auto['enhance']['rules_verified'], true, 'Verified exclusion flag is stored');
-check(array_column($auto['cdn'], 'auto_purge'), [true, false, false], 'Only active CDN purge layers can opt in to automatic purge');
+check(array_column($auto['cdn'], 'auto_purge'), ['inherit', 'off', 'inherit'], 'CDN layers can follow or turn off automatic purge independently');
+check(Providers::autoPurgePolicy(['auto_purge' => false]), 'off', 'Legacy explicit opt-out is preserved');
 check(Providers::scope($settings['cdn'][0]), 'static', 'Legacy image delivery uses static asset scope');
 check($settings['cdn'][0]['rewrite_images'] && !$settings['cdn'][0]['rewrite_urls'], true, 'A legacy image row does not start rewriting code');
 check(Providers::scope(['provider' => 'cname', 'scope' => 'html']), 'static', 'CNAME cannot register an HTML-proxy scope');
@@ -191,14 +192,14 @@ check(Providers::scopeSupportsHtml(['scope' => 'static']), false, 'Static CDN sc
 
 $html_row = ['provider' => 'bunny', 'zone_id' => '123', 'token' => 'unit-bunny', 'enabled' => true, 'html_cache_verified' => true];
 $verified = Providers::sanitize(['cdn' => [
-    $html_row + ['scope' => 'html_code'],
+    $html_row + ['scope' => 'html_code', 'auto_purge' => 'off'],
     $html_row + ['scope' => 'all', 'hostname' => 'dev.example.com'],
     $html_row + ['scope' => 'static'],
     $html_row + ['scope' => 'html', 'hostname' => 'assets.example.com'],
     $html_row + ['scope' => 'html', 'hostname' => 'https://dev.example.com/path/'],
 ]]);
 check(array_column($verified['cdn'], 'html_cache_verified'), [true, true, false, false, false], 'Verified HTML requires a matching hostname + eligible scope');
-check(array_column($verified['cdn'], 'auto_purge'), [true, true, false, false, false], 'Verified HTML always enables automatic purging');
+check(array_column($verified['cdn'], 'auto_purge'), ['off', 'inherit', 'inherit', 'inherit', 'inherit'], 'Verified HTML respects the CDN purge policy');
 $missingToken = Providers::sanitize(['cdn' => [array_replace($html_row, ['token' => '', 'scope' => 'html'])]]);
 check($missingToken['cdn'][0]['html_cache_verified'], false, 'Verified HTML requires provider credentials');
 
@@ -209,6 +210,20 @@ check(array_column($results, 'status'), ['ok','ok','ok'], 'Targeted results');
 check($GLOBALS['http'][0][0], 'https://api.bunny.net/purge?url=https%3A%2F%2Fimages.example.com%2Fwp-content%2Fuploads%2F2026%2F11%2Fimg.jpg&exactPath=true', 'Image layer targeted URL');
 check(json_decode($GLOBALS['http'][1][1]['body'], true), ['urls' => ['/hello/', '/wp-content/uploads/2026/11/img.jpg']], 'Gcore targeted paths');
 check(json_decode($GLOBALS['http'][2][1]['body'], true), ['files' => ['https://dev.example.com/hello/', 'https://dev.example.com/wp-content/uploads/2026/11/img.jpg']], 'Cloudflare targeted site URLs');
+
+$bunnyPage = Providers::sanitize(['cdn' => [[
+    'provider' => 'bunny', 'enabled' => true, 'zone_id' => '9128', 'token' => 'unit-bunny', 'scope' => 'html',
+]]]);
+$bunnyZone = 'https://api.bunny.net/pullzone/9128';
+$GLOBALS['bunny_zone'][$bunnyZone] = '{"Id":9128,"IgnoreQueryStrings":true,"Hostnames":[{"Value":"dev.example.com"}]}';
+$GLOBALS['http'] = [];
+check(Providers::purge($bunnyPage, 'urls', ['/hello/'])[0]['status'], 'error', 'Bunny cannot widen a slash URL to a wildcard purge');
+check(array_column($GLOBALS['http'], 0), [$bunnyZone], 'No purge is sent unless exact-path support is confirmed');
+$GLOBALS['bunny_zone'][$bunnyZone] = '{"Id":9128,"IgnoreQueryStrings":false,"Hostnames":[{"Value":"dev.example.com"}]}';
+$GLOBALS['http'] = [];
+check(Providers::purge($bunnyPage, 'urls', ['/hello/'])[0]['status'], 'ok', 'Bunny purges a known exact slash URL');
+check(array_column($GLOBALS['http'], 0), [$bunnyZone, 'https://api.bunny.net/purge?url=https%3A%2F%2Fdev.example.com%2Fhello%2F&exactPath=true'], 'Verified zone then exact purge');
+unset($GLOBALS['bunny_zone']);
 
 $scoped = Providers::sanitize(['cdn' => [
     ['provider' => 'bunny', 'enabled' => true, 'hostname' => 'code.example.com', 'scope' => 'code'],

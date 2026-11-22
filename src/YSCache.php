@@ -28,6 +28,7 @@ final class YSCache {
             YSCacheAdmin::register();
         }
         YSCacheAdminBar::register();
+        YSCacheAssetOptimization::register();
 
         add_action( 'init', [ $this, 'holdExternalHtml' ], 0, 0 );
         add_action( 'parse_request', [ $this, 'captureGeneration' ], 0, 0 );
@@ -95,10 +96,13 @@ final class YSCache {
         return [
             'enabled'         => ! empty( $settings['enabled'] ),
             'ttl_seconds'     => max( 1, min( YSCacheSettingsRepo::MAX_TTL_SECONDS, $ttl ) ),
+            'ttl_unit'        => in_array( $settings['ttl_unit'], [ 's', 'min', 'hr', 'day' ], true ) ? $settings['ttl_unit'] : 's',
+            'auto_purge'      => ! empty( $settings['auto_purge'] ),
             'auto_detect'     => ! empty( $settings['auto_detect'] ),
             'exclude_paths'   => self::lines( $settings['exclude_paths'] ),
             'exclude_cookies' => self::lines( $settings['exclude_cookies'] ),
             'exclude_agents'  => self::lines( $settings['exclude_agents'] ),
+            'assets'          => YSCacheAssetOptimization::sanitize( (array) $settings['assets'] ),
             'providers'       => YSCacheProviders::sanitize(
                 is_array( $settings['providers'] ) ? $settings['providers'] : [],
                 is_array( $before['providers'] ) ? $before['providers'] : []
@@ -134,11 +138,14 @@ final class YSCache {
 
     public function invalidateOnChange(): void {
         $settings = self::settings();
+        if ( empty( $settings['auto_purge'] ) ) {
+            return;
+        }
         // Clear the lower layer first so a refilled origin cannot reuse older HTML.
         if ( ( self::usesLocalHtml( $settings ) || self::delegatesHtml( $settings ) || self::hasEdgeHtml( $settings ) ) && ! YSCacheSettingsRepo::invalidate() ) {
             return;
         }
-        YSCacheEnhancePurge::onContentChange( $settings['providers'] );
+        YSCacheEnhancePurge::onContentChange( $settings );
     }
 
     public function captureGeneration(): void {

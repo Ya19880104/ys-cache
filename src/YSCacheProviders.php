@@ -61,6 +61,11 @@ final class YSCacheProviders
         return $available;
     }
 
+    public static function autoPurgePolicy(array $layer): string
+    {
+        return in_array($layer['auto_purge'] ?? 'inherit', ['off', false, 0, '0'], true) ? 'off' : 'inherit';
+    }
+
     public static function sanitize(array $input, array $previous = []): array
     {
         $submitted_enhance = (array) ($input['enhance'] ?? []);
@@ -69,7 +74,6 @@ final class YSCacheProviders
         $delegate_html = $enhance_enabled && !empty($submitted_enhance['delegate_html']);
         $enhance = [
             'enabled' => $enhance_enabled,
-            'auto_purge' => $enhance_enabled && ($delegate_html || !empty($submitted_enhance['auto_purge'])),
             'delegate_html' => $delegate_html,
             'rules_verified' => $enhance_enabled && !empty($submitted_enhance['rules_verified']),
             'url' => self::enhanceBase($submitted_enhance['url'] ?? ''),
@@ -110,7 +114,7 @@ final class YSCacheProviders
             $layer = [
                 'provider' => $name,
                 'enabled' => $name !== 'cname' && !empty($row['enabled']),
-                'auto_purge' => $name !== 'cname' && !empty($row['enabled']) && !empty($row['auto_purge']),
+                'auto_purge' => self::autoPurgePolicy($row),
                 'zone_id' => self::zoneId($name, $row['zone_id'] ?? ''),
                 'auth_email' => $email,
                 'hostname' => $hostname,
@@ -127,7 +131,6 @@ final class YSCacheProviders
                 $layer['token_constant'] = 'WP_ROCKET_CF_API_KEY';
             }
             $layer['html_cache_verified'] = !empty($row['html_cache_verified']) && self::canVerifyHtml($layer, $row['hostname'] ?? '');
-            $layer['auto_purge'] = $layer['auto_purge'] || $layer['html_cache_verified'];
 
             if ($layer['enabled'] || $layer['zone_id'] !== '' || $hostname !== '') {
                 $cdn[] = $layer;
@@ -418,6 +421,11 @@ final class YSCacheProviders
             return self::request($label, 'POST', 'https://api.bunny.net/pullzone/' . $zone . '/purgeCache', $headers, []);
         }
 
+        $directoryUrls = array_filter($files, static fn (string $url): bool => str_ends_with((string) wp_parse_url($url, PHP_URL_PATH), '/'));
+        if ($directoryUrls !== [] && !self::bunnySupportsExactPaths($zone, $headers, $directoryUrls)) {
+            return self::result($label, 'error', __('Bunny CDN could not verify an exact purge for this URL. Check its Pull Zone hostname and Ignore Query Strings setting.', 'ys-cache'));
+        }
+
         // Bunny takes one URL per API call.
         foreach ($files as $url) {
             $query = http_build_query(['url' => $url, 'exactPath' => 'true'], '', '&', PHP_QUERY_RFC3986);
@@ -427,6 +435,29 @@ final class YSCacheProviders
             }
         }
         return $result;
+    }
+
+    private static function bunnySupportsExactPaths(string $zone, array $headers, array $urls): bool
+    {
+        $response = wp_safe_remote_request('https://api.bunny.net/pullzone/' . $zone, [
+            'method' => 'GET',
+            'timeout' => 5,
+            'redirection' => 0,
+            'sslverify' => true,
+            'limit_response_size' => 524288,
+            'headers' => $headers + ['Accept' => 'application/json'],
+        ]);
+        if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
+            return false;
+        }
+        $resource = json_decode(wp_remote_retrieve_body($response), true);
+        // With IgnoreQueryStrings enabled, Bunny can broaden a slash URL to a wildcard purge.
+        if ((string) ($resource['Id'] ?? '') !== $zone || ($resource['IgnoreQueryStrings'] ?? null) !== false || !is_array($resource['Hostnames'] ?? null)) {
+            return false;
+        }
+        $configured = array_map([self::class, 'hostname'], array_column($resource['Hostnames'], 'Value'));
+        $requested = array_map(static fn (string $url): string => strtolower((string) wp_parse_url($url, PHP_URL_HOST)), $urls);
+        return array_diff($requested, $configured) === [];
     }
 
     private static function cdnToken(array $layer): string
