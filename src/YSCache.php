@@ -43,12 +43,12 @@ final class YSCache {
         add_filter( 'litespeed_buffer_finalize', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
         add_action( 'litespeed_control_finalize', [ $this, 'limitLiteSpeedTtl' ], PHP_INT_MAX, 0 );
 
-        ( new YSCacheInvalidation( [ $this, 'invalidateOnChange' ] ) )->register();
+        ( new YSCacheInvalidation( [ $this, 'invalidateOnChange' ], [ $this, 'invalidateStockOnChange' ] ) )->register();
         YSCacheEnhancePurge::register();
     }
 
-    public static function settings(): array {
-        $settings = YSCacheSettingsRepo::get();
+    public static function settings( bool $fresh = false ): array {
+        $settings = YSCacheSettingsRepo::get( $fresh );
         if ( ! empty( $settings['auto_detect'] ) ) {
             if ( ! isset( $settings['providers']['opcache'] ) ) {
                 $settings['providers']['opcache'] = [ 'enabled' => YSCacheProviders::opcacheAvailable() ];
@@ -164,6 +164,88 @@ final class YSCache {
         YSCacheEnhancePurge::onContentChange( $settings );
     }
 
+    public function invalidateStockOnChange( array $urls ): void {
+        $settings = self::settings();
+        if ( empty( $settings['auto_purge'] ) ) {
+            return;
+        }
+        $aliases = (array) ( $settings['providers']['alias_hosts'] ?? [] );
+        $urls = array_values( array_filter( (array) apply_filters( 'ys_cache_stock_purge_urls', $urls ), 'is_string' ) );
+        $targets = [];
+        foreach ( self::translatedPurgeUrls( $urls ) as $url ) {
+            $target = self::pagePurgeTarget( $url, $aliases );
+            if ( $target !== null ) {
+                $targets[ $target['url'] ] = true;
+            }
+        }
+        if ( $targets !== [] ) {
+            YSCacheEnhancePurge::onStockChange( $settings, array_keys( $targets ) );
+        }
+    }
+
+    /** Called by the background worker. Keep inventory purges limited to known pages. */
+    public static function purgeStockPages( array $urls, array $providers ): array {
+        $settings = self::settings();
+        $targets = [];
+        $paths = [];
+        foreach ( $urls as $url ) {
+            $target = self::pagePurgeTarget( $url );
+            if ( $target !== null ) {
+                $targets[ $target['url'] ] = true;
+                $paths[ $target['path'] ] = true;
+            }
+        }
+        if ( $targets === [] ) {
+            return [];
+        }
+
+        $results = [];
+        if ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::hasEdgeHtml( $settings ) ) {
+            foreach ( array_keys( $paths ) as $path ) {
+                if ( ! YSCacheSettingsRepo::invalidatePage( $path ) ) {
+                    return [ self::pagePurgeResult( 'YS CACHE', 'error', __( 'The page cache generation could not be updated.', 'ys-cache' ) ) + [ 'retryable' => true ] ];
+                }
+            }
+            $results[] = self::pagePurgeResult( 'YS CACHE', 'ok', __( 'Inventory page cache generations updated.', 'ys-cache' ) );
+        }
+        if ( ! empty( $providers['enhance']['enabled'] ) ) {
+            $state = self::delegatesHtml( $settings ) ? true : YSCacheEnhanceIntegration::status( $providers )['enabled'];
+            if ( $state === true ) {
+                $results[] = self::pagePurgeResult( 'YS CLOUD', 'skipped', __( 'YS CLOUD supports site-wide clearing only. Inventory changes use page-level clearing.', 'ys-cache' ) );
+                return $results;
+            }
+            if ( $state === null ) {
+                $results[] = self::pagePurgeResult( 'YS CLOUD', 'error', __( 'Unable to verify the YS CLOUD origin cache status. CDN purge was paused.', 'ys-cache' ) ) + [ 'retryable' => true ];
+                return $results;
+            }
+        }
+        return array_merge( $results, YSCacheProviders::purge( $providers, 'urls', array_keys( $targets ) ) );
+    }
+
+    private static function translatedPurgeUrls( array $urls ): array {
+        if ( ! is_callable( [ '\TRP_Translate_Press', 'get_trp_instance' ] ) ) {
+            return $urls;
+        }
+        $translate = \TRP_Translate_Press::get_trp_instance()->get_component( 'url_converter' );
+        if ( ! is_callable( [ $translate, 'get_url_for_language' ] ) ) {
+            return $urls;
+        }
+        $translated = $urls;
+        $settings = (array) get_option( 'trp_settings', [] );
+        foreach ( (array) ( $settings['publish-languages'] ?? [] ) as $language ) {
+            if ( ! is_string( $language ) || ! preg_match( '/\A[a-zA-Z0-9_-]{1,32}\z/', $language ) ) {
+                continue;
+            }
+            foreach ( $urls as $url ) {
+                $variant = $translate->get_url_for_language( $language, $url, '' );
+                if ( is_string( $variant ) ) {
+                    $translated[] = $variant;
+                }
+            }
+        }
+        return $translated;
+    }
+
     public function captureGeneration(): void {
         $settings = self::settings();
         if ( in_array( $_SERVER['REQUEST_METHOD'] ?? '', [ 'GET', 'HEAD' ], true ) && empty( $_SERVER['QUERY_STRING'] ) ) {
@@ -227,15 +309,15 @@ final class YSCache {
     }
 
     public static function purgePage( string $url ): array {
-        $target = self::pagePurgeTarget( $url );
+        $settings = self::settings();
+        $providers = $settings['providers'];
+        $target = self::pagePurgeTarget( $url, (array) ( $providers['alias_hosts'] ?? [] ) );
         if ( $target === null ) {
             return [ self::pagePurgeResult( 'YS CACHE', 'error', __( 'Enter a public page URL on this site without a query string or fragment.', 'ys-cache' ) ) ];
         }
 
-        $settings = self::settings();
-        $providers = $settings['providers'];
         $local = self::usesLocalHtml( $settings );
-        $cleared = ( ! $local && ! self::hasEdgeHtml( $settings ) ) || YSCacheSettingsRepo::invalidatePage( $target['path'] );
+        $cleared = ( ! $local && ! self::hasEdgeHtml( $settings ) && ! self::usesLiteSpeed( $settings ) ) || YSCacheSettingsRepo::invalidatePage( $target['path'] );
         $results = [ self::pagePurgeResult( 'YS CACHE', $cleared ? ( $local ? 'ok' : 'skipped' ) : 'error', $cleared
             ? ( $local ? __( 'This page’s HTML cache was cleared.', 'ys-cache' ) : __( 'The local HTML cache is disabled.', 'ys-cache' ) )
             : __( 'The page cache generation could not be updated.', 'ys-cache' ) ) ];
@@ -260,7 +342,7 @@ final class YSCache {
         return compact( 'layer', 'status', 'message' ) + [ 'http' => 0 ];
     }
 
-    private static function pagePurgeTarget( string $url ): ?array {
+    private static function pagePurgeTarget( string $url, array $aliases = [] ): ?array {
         $url = trim( $url );
         if ( strlen( $url ) > 2300 || preg_match( '/[\x00-\x20\x7f\\\\]/', $url ) ) {
             return null;
@@ -269,7 +351,8 @@ final class YSCache {
         $target = wp_parse_url( $url );
         if ( ! isset( $site['scheme'], $site['host'], $target['scheme'], $target['host'] ) ||
             ! in_array( $site['scheme'], [ 'http', 'https' ], true ) || $site['scheme'] !== strtolower( $target['scheme'] ) ||
-            strcasecmp( $site['host'], $target['host'] ) !== 0 || count( array_intersect( [ 'user', 'pass', 'query', 'fragment' ], array_keys( $target ) ) ) ) {
+            ( strcasecmp( $site['host'], $target['host'] ) !== 0 && ! in_array( strtolower( $target['host'] ), $aliases, true ) ) ||
+            count( array_intersect( [ 'user', 'pass', 'query', 'fragment' ], array_keys( $target ) ) ) ) {
             return null;
         }
 

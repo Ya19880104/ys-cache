@@ -47,14 +47,23 @@ function content_url($path) { return 'https://dev.example.com/wp-content' . $pat
 function includes_url() { return 'https://dev.example.com/wp-includes/'; }
 function wp_safe_remote_request($url, $args) {
     $GLOBALS['http'][] = [$url, $args];
-    $status = str_contains($url, 'gcore.com') ? 201 : (str_ends_with($url, '/purgeCache') ? 204 : 200);
+    if (!empty($GLOBALS['transport_error'][$url])) {
+        return new stdClass();
+    }
+    $status = $args['method'] === 'GET' ? 200 : (str_contains($url, 'gcore.com') ? 201 : (str_ends_with($url, '/purgeCache') ? 204 : 200));
+    $body = $args['method'] === 'GET'
+        ? ($GLOBALS['resource_reply'][$url] ?? $GLOBALS['bunny_zone'][$url] ?? '')
+        : (str_contains($url, 'cloudflare.com') ? ($GLOBALS['cloudflare_reply'] ?? '{"success":true}') : '');
+    if ($args['method'] === 'POST' && str_contains($url, 'gcore.com')) {
+        $body = $GLOBALS['gcore_reply'] ?? $args['body'];
+    }
     return [
         'status' => $GLOBALS['http_status'][$url] ?? $status,
-        'body' => str_contains($url, 'cloudflare.com') ? ($GLOBALS['cloudflare_reply'] ?? '{"success":true}') : ($GLOBALS['bunny_zone'][$url] ?? ''),
+        'body' => $body,
         'content_type' => $GLOBALS['response_type'] ?? 'application/json',
     ];
 }
-function is_wp_error($response) { return false; }
+function is_wp_error($response) { return $response instanceof stdClass; }
 function wp_json_encode($data) { return json_encode($data); }
 function wp_remote_retrieve_response_code($response) { return $response['status']; }
 function wp_remote_retrieve_header($response, $header) { return $response['content_type']; }
@@ -149,26 +158,31 @@ if ($core !== '') {
     echo "Native WordPress HTML Tag Processor checks passed.\n";
 }
 
+$bunnyZone = 'https://api.bunny.net/pullzone/9128';
+$assetBunny = '{"Id":9128,"IgnoreQueryStrings":false,"Hostnames":[{"Value":"images.example.com"}]}';
+$GLOBALS['bunny_zone'][$bunnyZone] = $assetBunny;
 $GLOBALS['http'] = [];
 $results = Providers::purge($settings);
 check(array_column($results, 'status'), ['ok','ok','ok','ok'], 'Full purge results');
 check(array_column($GLOBALS['http'], 0), [
     'https://enhance.example.net/api/v2/domains/e2f3837f-314e-403b-aa6b-8d523513deed/nginx_fastcgi',
+    $bunnyZone,
     'https://api.bunny.net/pullzone/9128/purgeCache',
     'https://api.gcore.com/cdn/resources/4912/purge',
     'https://api.cloudflare.com/client/v4/zones/0123456789abcdef0123456789abcdef/purge_cache',
 ], 'Origin-to-edge call order');
 check($GLOBALS['http'][0][1]['method'], 'DELETE', 'Enhance method');
 check($GLOBALS['http'][0][1]['redirection'], 0, 'Enhance refuses redirects');
-check($GLOBALS['http'][1][1]['body'], '{}', 'Bunny pull-zone purge requires an empty JSON object');
-check($GLOBALS['http'][2][1]['headers']['Authorization'], 'APIKey unit-gcore$foo', 'Gcore auth');
-check(json_decode($GLOBALS['http'][2][1]['body'], true), ['paths' => []], 'Gcore full payload');
-check($GLOBALS['http'][3][1]['headers']['Authorization'], 'Bearer unit-rocket-constant', 'CF imported token resolution');
-check(json_decode($GLOBALS['http'][3][1]['body'], true), ['hosts' => ['dev.example.com']], 'Cloudflare host purge');
+check($GLOBALS['http'][1][1]['method'], 'GET', 'Bunny Pull Zone checks the configured hostname');
+check($GLOBALS['http'][2][1]['body'], '{}', 'Bunny pull-zone purge requires an empty JSON object');
+check($GLOBALS['http'][3][1]['headers']['Authorization'], 'APIKey unit-gcore$foo', 'Gcore auth');
+check(json_decode($GLOBALS['http'][3][1]['body'], true), ['paths' => []], 'Gcore full payload');
+check($GLOBALS['http'][4][1]['headers']['Authorization'], 'Bearer unit-rocket-constant', 'CF imported token resolution');
+check(json_decode($GLOBALS['http'][4][1]['body'], true), ['hosts' => ['dev.example.com']], 'Cloudflare host purge');
 
 $enhance_endpoint = $GLOBALS['http'][0][0];
-$bunny_endpoint = $GLOBALS['http'][1][0];
-$gcore_endpoint = $GLOBALS['http'][2][0];
+$bunny_endpoint = $GLOBALS['http'][2][0];
+$gcore_endpoint = $GLOBALS['http'][3][0];
 $GLOBALS['http'] = [];
 $GLOBALS['http_status'] = [$enhance_endpoint => 503];
 check(array_column(Providers::purge($settings), 'status'), ['error'], 'Failed Enhance purge stops the chain');
@@ -176,7 +190,7 @@ check(array_column($GLOBALS['http'], 0), [$enhance_endpoint], 'No CDN call after
 $GLOBALS['http'] = [];
 $GLOBALS['http_status'] = [$gcore_endpoint => 429];
 check(array_column(Providers::purge($settings), 'status'), ['ok', 'ok', 'error'], 'Failure stops the chain at the affected CDN');
-check(array_column($GLOBALS['http'], 0), [$enhance_endpoint, $bunny_endpoint, $gcore_endpoint], 'Outer CDN skipped after inner CDN failure');
+check(array_column($GLOBALS['http'], 0), [$enhance_endpoint, $bunnyZone, $bunny_endpoint, $gcore_endpoint], 'Outer CDN skipped after inner CDN failure');
 unset($GLOBALS['http_status']);
 
 $liteSpeed = $settings;
@@ -184,7 +198,7 @@ $liteSpeed['litespeed'] = ['enabled' => true];
 $cloudflare_endpoint = 'https://api.cloudflare.com/client/v4/zones/0123456789abcdef0123456789abcdef/purge_cache';
 $GLOBALS['http'] = [];
 check(array_column(Providers::purge($liteSpeed), 'status'), ['ok', 'ok', 'ok', 'ok', 'ok'], 'Full chain accepts native origin dispatch before the API layers');
-check(array_column($GLOBALS['http'], 0), ['litespeed-origin', $enhance_endpoint, $bunny_endpoint, $gcore_endpoint, $cloudflare_endpoint], 'LiteSpeed is the first origin stage');
+check(array_column($GLOBALS['http'], 0), ['litespeed-origin', $enhance_endpoint, $bunnyZone, $bunny_endpoint, $gcore_endpoint, $cloudflare_endpoint], 'LiteSpeed is the first origin stage');
 check($GLOBALS['http'][0][1], [], 'Full purge requests the complete LiteSpeed site');
 
 $GLOBALS['http'] = [];
@@ -239,14 +253,13 @@ $GLOBALS['http'] = [];
 $urls = ['/hello/', '/wp-content/uploads/2026/11/img.jpg', 'https://outside.example.org/must-skip', '/archive/%2a'];
 $results = Providers::purge($settings, 'urls', $urls);
 check(array_column($results, 'status'), ['ok','ok','ok'], 'Targeted results');
-check($GLOBALS['http'][0][0], 'https://api.bunny.net/purge?url=https%3A%2F%2Fimages.example.com%2Fwp-content%2Fuploads%2F2026%2F11%2Fimg.jpg&exactPath=true', 'Image layer targeted URL');
-check(json_decode($GLOBALS['http'][1][1]['body'], true), ['urls' => ['/hello/', '/wp-content/uploads/2026/11/img.jpg']], 'Gcore targeted paths');
-check(json_decode($GLOBALS['http'][2][1]['body'], true), ['files' => ['https://dev.example.com/hello/', 'https://dev.example.com/wp-content/uploads/2026/11/img.jpg']], 'Cloudflare targeted site URLs');
+check($GLOBALS['http'][1][0], 'https://api.bunny.net/purge?url=https%3A%2F%2Fimages.example.com%2Fwp-content%2Fuploads%2F2026%2F11%2Fimg.jpg&exactPath=true&async=false', 'Image layer targeted URL');
+check(json_decode($GLOBALS['http'][2][1]['body'], true), ['urls' => ['/hello/', '/wp-content/uploads/2026/11/img.jpg']], 'Gcore targeted paths');
+check(json_decode($GLOBALS['http'][3][1]['body'], true), ['files' => ['https://dev.example.com/hello/', 'https://dev.example.com/wp-content/uploads/2026/11/img.jpg']], 'Cloudflare targeted site URLs');
 
 $bunnyPage = Providers::sanitize(['cdn' => [[
     'provider' => 'bunny', 'enabled' => true, 'zone_id' => '9128', 'token' => 'unit-bunny', 'scope' => 'html',
 ]]]);
-$bunnyZone = 'https://api.bunny.net/pullzone/9128';
 $GLOBALS['bunny_zone'][$bunnyZone] = '{"Id":9128,"IgnoreQueryStrings":true,"Hostnames":[{"Value":"dev.example.com"}]}';
 $GLOBALS['http'] = [];
 check(Providers::purge($bunnyPage, 'urls', ['/hello/'])[0]['status'], 'error', 'Bunny cannot widen a slash URL to a wildcard purge');
@@ -254,8 +267,8 @@ check(array_column($GLOBALS['http'], 0), [$bunnyZone], 'No purge is sent unless 
 $GLOBALS['bunny_zone'][$bunnyZone] = '{"Id":9128,"IgnoreQueryStrings":false,"Hostnames":[{"Value":"dev.example.com"}]}';
 $GLOBALS['http'] = [];
 check(Providers::purge($bunnyPage, 'urls', ['/hello/'])[0]['status'], 'ok', 'Bunny purges a known exact slash URL');
-check(array_column($GLOBALS['http'], 0), [$bunnyZone, 'https://api.bunny.net/purge?url=https%3A%2F%2Fdev.example.com%2Fhello%2F&exactPath=true'], 'Verified zone then exact purge');
-unset($GLOBALS['bunny_zone']);
+check(array_column($GLOBALS['http'], 0), [$bunnyZone, 'https://api.bunny.net/purge?url=https%3A%2F%2Fdev.example.com%2Fhello%2F&exactPath=true&async=false'], 'Verified zone then exact purge');
+$GLOBALS['bunny_zone'][$bunnyZone] = $assetBunny;
 
 $scoped = Providers::sanitize(['cdn' => [
     ['provider' => 'bunny', 'enabled' => true, 'hostname' => 'code.example.com', 'scope' => 'code'],
@@ -274,6 +287,121 @@ check(array_column($results, 'status'), ['ok', 'skipped'], 'Static assets skip t
 check(json_decode($GLOBALS['http'][0][1]['body'], true), ['urls' => [
     '/wp-content/uploads/zh/hero.jpg', '/wp-includes/js/jquery/jquery.min.js?ver=3.7.1',
 ]], 'Static purge includes images and versioned JavaScript');
+
+$cfZoneA = '0123456789abcdef0123456789abcdef';
+$cfZoneB = '1123456789abcdef0123456789abcdef';
+$cfResourceA = 'https://api.cloudflare.com/client/v4/zones/' . $cfZoneA;
+$cfResourceB = 'https://api.cloudflare.com/client/v4/zones/' . $cfZoneB;
+$GLOBALS['resource_reply'][$cfResourceA] = json_encode(['success' => true, 'result' => ['id' => $cfZoneA, 'name' => 'example.com', 'status' => 'active']]);
+$GLOBALS['resource_reply'][$cfResourceB] = json_encode(['success' => true, 'result' => ['id' => $cfZoneB, 'name' => 'example.net', 'status' => 'active']]);
+$cf = ['provider' => 'cloudflare', 'enabled' => true, 'scope' => 'html', 'token' => 'unit-cloudflare', 'zone_id' => $cfZoneA];
+$aliasConfig = Providers::sanitize([
+    'alias_hosts' => "WWW.Example.COM.\nwww.example.com, dev.example.com\nhttps://invalid.example.com/path\n127.0.0.1\n*.example.com",
+    'cdn' => [$cf],
+]);
+check($aliasConfig['alias_hosts'], ['www.example.com', 'dev.example.com'], 'Normalized, unambiguous DNS hostnames');
+check(Providers::sanitize([], $aliasConfig)['alias_hosts'], $aliasConfig['alias_hosts'], 'An absent alias input retains configured aliases');
+check(Providers::htmlHostsForLayer($aliasConfig, $aliasConfig['cdn'][0]), ['dev.example.com', 'www.example.com'], 'Canonical host deduplicated in alias groups');
+$GLOBALS['http'] = [];
+$_SERVER['HTTP_HOST'] = 'unconfigured.example.org';
+check(array_column(Providers::purge($aliasConfig, 'urls', ['/zh/product/', 'https://www.example.com/zh/product/']), 'status'), ['ok'], 'Cloudflare accepts both deliberate aliases');
+check(array_column($GLOBALS['http'], 0), [$cfResourceA, $cloudflare_endpoint], 'Cloudflare verifies the configured zone and submits its files');
+check(json_decode($GLOBALS['http'][1][1]['body'], true), ['files' => [
+    'https://dev.example.com/zh/product/', 'https://www.example.com/zh/product/',
+]], 'Canonical and alias paths deduplicated, untrusted request host ignored');
+unset($_SERVER['HTTP_HOST']);
+$GLOBALS['http'] = [];
+check(Providers::purge($aliasConfig, 'cdn')[0]['status'], 'ok', 'Default full purge remains hostname-scoped');
+check(json_decode($GLOBALS['http'][1][1]['body'], true), ['hosts' => ['dev.example.com', 'www.example.com']], 'Full Cloudflare exact host list');
+$full = $aliasConfig;
+$full['cdn'][0]['purge_entire_zone'] = true;
+$GLOBALS['http'] = [];
+check(Providers::purge($full, 'cdn')[0]['status'], 'ok', 'Explicit entire-zone Cloudflare setting remains supported');
+check(json_decode($GLOBALS['http'][1][1]['body'], true), ['purge_everything' => true], 'Full Cloudflare zone only when selected');
+
+$crossZone = Providers::sanitize([
+    'alias_hosts' => ['shop.example.net'],
+    'cdn' => [$cf, array_replace($cf, ['zone_id' => $cfZoneB, 'hostname' => 'shop.example.net'])],
+]);
+$GLOBALS['http'] = [];
+check(array_column(Providers::purge($crossZone, 'urls', ['/shop/item/']), 'status'), ['ok', 'ok'], 'An alias assigned to a different zone does not block the canonical zone');
+check(array_column($GLOBALS['http'], 0), [$cloudflare_endpoint, $cfResourceB, $cfResourceB . '/purge_cache'], 'Dedicated alias is sent only to its own Cloudflare resource');
+check(json_decode($GLOBALS['http'][0][1]['body'], true), ['files' => ['https://dev.example.com/shop/item/']], 'Canonical layer omits alias assigned elsewhere');
+check(json_decode($GLOBALS['http'][2][1]['body'], true), ['files' => ['https://shop.example.net/shop/item/']], 'Dedicated layer purges the configured alias');
+$legacyDedicated = $crossZone;
+unset($legacyDedicated['alias_hosts']);
+$GLOBALS['http'] = [];
+check(array_column(Providers::purge($legacyDedicated, 'cdn'), 'status'), ['ok', 'ok'], 'Previously configured dedicated HTML hostname works without a separate alias entry');
+check(json_decode($GLOBALS['http'][0][1]['body'], true), ['hosts' => ['dev.example.com']], 'Legacy dedicated hostname stays out of the canonical purge');
+check(json_decode($GLOBALS['http'][2][1]['body'], true), ['hosts' => ['shop.example.net']], 'Legacy dedicated hostname still receives a verified full purge');
+$onlyAutomatic = $crossZone;
+$onlyAutomatic['cdn_topology'] = $crossZone['cdn'];
+$onlyAutomatic['cdn'] = [$crossZone['cdn'][0]];
+$GLOBALS['http'] = [];
+check(Providers::purge($onlyAutomatic, 'urls', ['/shop/item/'])[0]['status'], 'ok', 'A manual-only dedicated alias remains outside the automatic canonical layer');
+check(json_decode($GLOBALS['http'][0][1]['body'], true), ['files' => ['https://dev.example.com/shop/item/']], 'Retain alias ownership across a filtered automatic CDN list');
+$crossZone['cdn'][] = array_replace($crossZone['cdn'][1], ['zone_id' => $cfZoneA]);
+$GLOBALS['http'] = [];
+check(Providers::purge($crossZone, 'cdn')[0]['status'], 'error', 'Conflicting CDNs for an alias fail before any remote purge');
+check(count($GLOBALS['http']), 0, 'No API call for an ambiguous alias assignment');
+
+$badZone = $aliasConfig;
+$badZone['alias_hosts'] = ['shop.example.net'];
+$GLOBALS['http'] = [];
+check(Providers::purge($badZone, 'urls', ['/shop/item/'])[0]['status'], 'error', 'Cloudflare cross-zone alias without a dedicated row is rejected');
+check(array_column($GLOBALS['http'], 0), [$cfResourceA], 'No mutation for unverified alias zone');
+$GLOBALS['http_status'][$cfResourceA] = 429;
+$GLOBALS['http'] = [];
+check(Providers::purge($aliasConfig, 'urls', ['/shop/item/'])[0]['http'], 429, 'Alias resource preflight preserves retryable HTTP status');
+unset($GLOBALS['http_status']);
+$GLOBALS['transport_error'][$cfResourceA] = true;
+check(Providers::purge($aliasConfig, 'urls', ['/shop/item/'])[0]['retryable'], true, 'Alias resource connection failure remains retryable');
+unset($GLOBALS['transport_error']);
+
+$assetCloudflare = Providers::sanitize(['alias_hosts' => ['www.example.com'], 'cdn' => [
+    array_replace($cf, ['hostname' => 'assets.example.com', 'scope' => 'all', 'rewrite_urls' => true]),
+]]);
+$GLOBALS['http'] = [];
+check(Providers::purge($assetCloudflare, 'urls', ['/shop/item/'])[0]['status'], 'skipped', 'An assets CNAME does not purge same-named web pages');
+check(Providers::purge($assetCloudflare, 'cdn')[0]['status'], 'ok', 'Existing Cloudflare assets configuration retains exact host purge');
+check(json_decode($GLOBALS['http'][0][1]['body'], true), ['hosts' => ['assets.example.com']], 'Site aliases do not widen a full assets host purge');
+
+$bunnyAliases = $bunnyPage;
+$bunnyAliases['alias_hosts'] = ['www.example.com', 'shop.example.com'];
+$GLOBALS['bunny_zone'][$bunnyZone] = '{"Id":9128,"IgnoreQueryStrings":false,"Hostnames":[{"Value":"dev.example.com"},{"Value":"www.example.com"}]}';
+$GLOBALS['http'] = [];
+check(Providers::purge($bunnyAliases, 'urls', ['/hello/'])[0]['status'], 'error', 'Missing Bunny Pull Zone alias fails before the first purge');
+check(array_column($GLOBALS['http'], 0), [$bunnyZone], 'No partial Bunny mutation from a mismatched hostname');
+$GLOBALS['bunny_zone'][$bunnyZone] = '{"Id":9128,"IgnoreQueryStrings":false,"Hostnames":[{"Value":"dev.example.com"},{"Value":"www.example.com"},{"Value":"shop.example.com"}]}';
+check(Providers::targetBatchLimit($bunnyAliases), 6, 'Worker batch takes three Bunny hosts per canonical URL into account');
+$GLOBALS['http'] = [];
+check(Providers::purge($bunnyAliases, 'urls', ['/hello/'])[0]['status'], 'ok', 'Three verified Bunny targets accepted');
+check(count($GLOBALS['http']), 4, 'Bunny GET plus one synchronous purge per hostname');
+$secondBunnyPurge = $GLOBALS['http'][2][0];
+$bunnyAliases['cdn'][] = $cf;
+$GLOBALS['http_status'][$secondBunnyPurge] = 503;
+$GLOBALS['http'] = [];
+$partial = Providers::purge($bunnyAliases, 'urls', ['/hello/']);
+check(array_column($partial, 'status'), ['error'], 'Partial Bunny failure stops the edge chain');
+check($partial[0]['http'], 503, 'Transient failure retained on a partial purge');
+check(str_contains($partial[0]['message'], '1 of 3'), true, 'Partial success is reported explicitly');
+check(count($GLOBALS['http']), 3, 'No third URL or outer CDN after second Bunny failure');
+unset($GLOBALS['http_status']);
+$GLOBALS['bunny_zone'][$bunnyZone] = $assetBunny;
+
+$gcoreAliases = Providers::sanitize(['alias_hosts' => ['www.example.com'], 'cdn' => [[
+    'provider' => 'gcore', 'enabled' => true, 'zone_id' => '4912', 'scope' => 'html', 'token' => 'unit-gcore',
+]]]);
+$gcoreResource = 'https://api.gcore.com/cdn/resources/4912';
+$GLOBALS['resource_reply'][$gcoreResource] = '{"id":4912,"cname":"dev.example.com","secondaryHostnames":["www.example.com"]}';
+$GLOBALS['http'] = [];
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/'])[0]['status'], 'ok', 'Gcore validates the configured domain and its alias');
+check(array_column($GLOBALS['http'], 0), [$gcoreResource, $gcore_endpoint], 'A Gcore layer submits to the selected resource only');
+$GLOBALS['gcore_reply'] = '{"urls":["/shop/item/"]}';
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/', '/shop/another/'])[0]['status'], 'error', 'An accepted Gcore request must echo every submitted path');
+unset($GLOBALS['gcore_reply']);
+check(json_decode($GLOBALS['http'][1][1]['body'], true), ['urls' => ['/shop/item/']], 'Gcore sends each cache path only once per resource');
+unset($GLOBALS['resource_reply']);
 
 $form = $settings;
 unset($form['cdn'][0]['token'], $form['cdn'][2]['token_constant'], $form['enhance']['token']);
@@ -299,6 +427,8 @@ check(count($GLOBALS['http']), 0, 'No outbound request for invalid configuration
 
 $GLOBALS['cloudflare_reply'] = '{"success":false}';
 check(Providers::purge($settings, 'cdn')[2]['status'], 'error', 'Cloudflare rejection cannot pass on HTTP 200');
+$GLOBALS['cloudflare_reply'] = '{"success":true,"errors":[{"message":"Partial failure"}]}';
+check(Providers::purge($settings, 'cdn')[2]['status'], 'error', 'Cloudflare errors cannot be silently accepted on imperfect success');
 unset($GLOBALS['cloudflare_reply']);
 
 $GLOBALS['response_type'] = 'text/html; charset=UTF-8';

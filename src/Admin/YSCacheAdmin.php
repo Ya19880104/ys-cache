@@ -113,13 +113,19 @@ final class YSCacheAdmin {
         if ( ! YSCache::save( $settings ) ) {
             wp_send_json_error( [ 'message' => __( 'Unable to save settings. Check database table and cache directory permissions.', 'ys-cache' ) ], 500 );
         }
+        $saved = YSCache::settings();
+        $autoPurge = ! empty( $saved['auto_purge'] );
+        if ( ! $autoPurge && ! empty( $before['auto_purge'] ) ) {
+            YSCacheEnhancePurge::cancel();
+        }
+        $cdnChanged = ( $candidate['alias_hosts'] ?? [] ) !== ( $before['providers']['alias_hosts'] ?? [] ) ||
+            $candidate['cdn'] !== ( $before['providers']['cdn'] ?? [] );
         $results = $wasDelegated && ( ! $delegated ||
             YSCacheEnhanceIntegration::fingerprint( $beforeEnhance ) !==
             YSCacheEnhanceIntegration::fingerprint( $candidate['enhance'] ) )
             ? YSCacheProviders::purge( $before['providers'], 'enhance' ) : [];
-        if ( ( $delegated || $usesLiteSpeed ) && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
-            $saved = YSCache::settings();
-            if ( ! empty( $saved['auto_purge'] ) ) {
+        if ( ( $delegated || $usesLiteSpeed || $cdnChanged ) && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
+            if ( $autoPurge ) {
                 YSCacheEnhancePurge::onContentChange( $saved );
             } elseif ( $enablingLiteSpeed ) {
                 $results = array_merge( $results, YSCacheProviders::purge( $candidate, 'litespeed' ) );
@@ -131,6 +137,7 @@ final class YSCacheAdmin {
             'message' => __( 'Settings saved. The existing YS CACHE HTML cache was invalidated.', 'ys-cache' ),
             'delegated' => $delegated,
             'results' => $results,
+            'alias_hosts' => $candidate['alias_hosts'] ?? [],
             'cdn' => array_map( static fn ( array $row ): array => array_intersect_key( $row, array_flip( [ 'provider', 'zone_id', 'auth_email', 'hostname', 'auto_purge', 'html_cache_verified' ] ) ), $candidate['cdn'] ),
         ] );
     }

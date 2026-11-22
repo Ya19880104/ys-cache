@@ -21,6 +21,8 @@ final class YSCacheProviders
     ];
 
     private const SCOPES = ['all', 'html', 'code', 'static', 'html_code'];
+    private const MAX_BUNNY_URLS = 20;
+    private const MAX_PURGE_BATCHES = 20;
 
     private const ASSET_EXTENSIONS = [
         'code' => ['css', 'js', 'mjs'],
@@ -46,6 +48,41 @@ final class YSCacheProviders
         return in_array(self::scope($layer), ['all', 'html', 'html_code'], true);
     }
 
+    public static function normalizeAliasHosts($raw): array
+    {
+        $values = is_string($raw) ? preg_split('/[\s,]+/', $raw, -1, PREG_SPLIT_NO_EMPTY) : (is_array($raw) ? $raw : []);
+        $hosts = [];
+        foreach ($values as $value) {
+            $host = is_string($value) ? self::hostname(rtrim(trim($value), '.')) : '';
+            if ($host !== '') {
+                $hosts[$host] = true;
+            }
+        }
+        return array_keys($hosts);
+    }
+
+    public static function htmlHostsForLayer(array $settings, array $layer): array
+    {
+        $site = self::urlParts(home_url('/'), []);
+        if ($site === []) {
+            return [];
+        }
+        [$aliases, $dedicated] = self::aliasTopology($settings, $site);
+        return self::htmlHosts($layer, $site, $aliases, $dedicated);
+    }
+
+    public static function targetBatchLimit(array $settings): int
+    {
+        $limit = 100;
+        foreach ((array) ($settings['cdn'] ?? []) as $layer) {
+            if (is_array($layer) && !empty($layer['enabled']) && ($layer['provider'] ?? '') === 'bunny') {
+                $fanout = max(1, count(self::htmlHostsForLayer($settings, $layer)));
+                $limit = min($limit, max(1, intdiv(self::MAX_BUNNY_URLS, $fanout)));
+            }
+        }
+        return $limit;
+    }
+
     public static function hasUrlRewriting(array $settings): bool
     {
         return self::routingHosts($settings) !== [];
@@ -68,6 +105,7 @@ final class YSCacheProviders
 
     public static function sanitize(array $input, array $previous = []): array
     {
+        $alias_hosts = self::normalizeAliasHosts($input['alias_hosts'] ?? $previous['alias_hosts'] ?? []);
         $submitted_enhance = (array) ($input['enhance'] ?? []);
         $previous_enhance = (array) ($previous['enhance'] ?? []);
         $enhance_enabled = !empty($submitted_enhance['enabled']);
@@ -130,7 +168,7 @@ final class YSCacheProviders
                 && ($row['token_constant'] ?? $previous_layer['token_constant'] ?? '') === 'WP_ROCKET_CF_API_KEY') {
                 $layer['token_constant'] = 'WP_ROCKET_CF_API_KEY';
             }
-            $layer['html_cache_verified'] = !empty($row['html_cache_verified']) && self::canVerifyHtml($layer, $row['hostname'] ?? '');
+            $layer['html_cache_verified'] = !empty($row['html_cache_verified']) && self::canVerifyHtml($layer, $row['hostname'] ?? '', $alias_hosts);
 
             if ($layer['enabled'] || $layer['zone_id'] !== '' || $hostname !== '') {
                 $cdn[] = $layer;
@@ -142,17 +180,18 @@ final class YSCacheProviders
             'opcache' => ['enabled' => !empty($input['opcache']['enabled'])],
             'enhance' => $enhance,
             'litespeed' => ['enabled' => !empty($litespeed['enabled']), 'rules_verified' => !empty($litespeed['rules_verified'])],
+            'alias_hosts' => $alias_hosts,
             'cdn' => $cdn,
         ];
     }
 
-    private static function canVerifyHtml(array $layer, $submittedHostname): bool
+    private static function canVerifyHtml(array $layer, $submittedHostname, array $alias_hosts): bool
     {
         if (!$layer['enabled'] || $layer['zone_id'] === '' || !self::scopeSupportsHtml($layer) || self::cdnToken($layer) === '') {
             return false;
         }
         $site = self::urlParts(home_url('/'), []);
-        return $site !== [] && ($layer['hostname'] === $site['host']
+        return $site !== [] && ($layer['hostname'] === $site['host'] || in_array($layer['hostname'], $alias_hosts, true)
             || ($layer['hostname'] === '' && self::text($submittedHostname) === ''));
     }
 
@@ -206,11 +245,17 @@ final class YSCacheProviders
         }
         $targeted = $scope === 'urls' || ($scope === 'cdn' && $urls !== []);
         $sources = $targeted ? self::assetSources($site) : [];
+        [$aliases, $dedicated, $conflict] = self::aliasTopology($settings, $site);
+        if ($conflict) {
+            $results[] = self::result('CDN', 'error', __('A site alias is assigned to more than one resource at the same CDN provider.', 'ys-cache'));
+            return $results;
+        }
         foreach ((array) ($settings['cdn'] ?? []) as $layer) {
             if (!is_array($layer) || empty($layer['enabled'])) {
                 continue;
             }
-            $result = self::purgeCdn($layer, $site, $sources, $targeted, $urls);
+            $html_hosts = self::htmlHosts($layer, $site, $aliases, $dedicated);
+            $result = self::purgeCdn($layer, $site, $sources, $targeted, $urls, array_keys($aliases), $html_hosts);
             $results[] = $result;
             if ($result['status'] === 'error') {
                 break;
@@ -221,6 +266,52 @@ final class YSCacheProviders
             $results[] = self::result('CDN', 'skipped', __('No CDN purge integrations are enabled.', 'ys-cache'));
         }
         return $results;
+    }
+
+    private static function aliasTopology(array $settings, array $site): array
+    {
+        $aliases = array_fill_keys(self::normalizeAliasHosts($settings['alias_hosts'] ?? []), true);
+        unset($aliases[$site['host']]);
+        $dedicated = [];
+        $conflict = false;
+        foreach ((array) ($settings['cdn_topology'] ?? $settings['cdn'] ?? []) as $layer) {
+            if (!is_array($layer) || empty($layer['enabled']) || !self::scopeSupportsHtml($layer)) {
+                continue;
+            }
+            $host = self::hostname($layer['hostname'] ?? '');
+            $provider = self::text($layer['provider'] ?? '');
+            if ($host === '' || $host === $site['host'] || !isset(self::PROVIDER_LABELS[$provider]) || $provider === 'cname') {
+                continue;
+            }
+            // Previously configured explicit HTML layers own their hostname without a separate alias entry.
+            if (!self::isAliasLayer($layer, $aliases[$host] ?? false)) {
+                continue;
+            }
+            $aliases[$host] ??= false;
+            $resource = self::zoneId($provider, $layer['zone_id'] ?? '');
+            if (isset($dedicated[$host][$provider]) && $dedicated[$host][$provider] !== $resource) {
+                $conflict = true;
+            }
+            $dedicated[$host][$provider] = $resource;
+        }
+        return [$aliases, array_keys($dedicated), $conflict];
+    }
+
+    private static function htmlHosts(array $layer, array $site, array $aliases, array $dedicated): array
+    {
+        if (!self::scopeSupportsHtml($layer)) {
+            return [];
+        }
+        $host = self::hostname($layer['hostname'] ?? '');
+        if ($host === '' || $host === $site['host']) {
+            return array_merge([$site['host']], array_values(array_diff(array_keys($aliases), $dedicated)));
+        }
+        return array_key_exists($host, $aliases) && self::isAliasLayer($layer, $aliases[$host]) ? [$host] : [];
+    }
+
+    private static function isAliasLayer(array $layer, bool $configured): bool
+    {
+        return $configured || (empty($layer['rewrite_urls']) && empty($layer['rewrite_images']));
     }
 
     public static function rewriteHtml(string $html, array $settings): string
@@ -380,7 +471,7 @@ final class YSCacheProviders
         return ['endpoint' => $base . '/v2/domains/' . $domain, 'headers' => $headers];
     }
 
-    private static function purgeCdn(array $layer, array $site, array $sources, bool $targeted, array $urls): array
+    private static function purgeCdn(array $layer, array $site, array $sources, bool $targeted, array $urls, array $aliases, array $html_hosts): array
     {
         $provider = $layer['provider'] ?? '';
         if (!is_string($provider) || !isset(self::PROVIDER_LABELS[$provider]) || $provider === 'cname') {
@@ -389,70 +480,113 @@ final class YSCacheProviders
 
         $hostname = self::hostname($layer['hostname'] ?? '');
         $label = self::PROVIDER_LABELS[$provider] . ($hostname !== '' ? ' (' . $hostname . ')' : '');
-        $files = $targeted ? self::layerUrls($urls, $site, $sources, $hostname, $layer) : [];
+        if (self::scopeSupportsHtml($layer) && $html_hosts === [] && (self::scope($layer) === 'html'
+            || (empty($layer['rewrite_urls']) && empty($layer['rewrite_images'])))) {
+            return self::result($label, 'error', __('Add the CDN website hostname to the site aliases before purging this layer.', 'ys-cache'));
+        }
+        $files = $targeted ? self::layerUrls($urls, $site, $sources, $hostname, $layer, $aliases, $html_hosts) : [];
         if ($targeted && $files === []) {
             return self::result($label, 'skipped', __('No URLs apply to this CDN layer.', 'ys-cache'));
         }
+        $hosts = $targeted
+            ? array_values(array_unique(array_map(static fn (string $url): string => strtolower((string) wp_parse_url($url, PHP_URL_HOST)), $files)))
+            : ($html_hosts !== [] ? $html_hosts : ($hostname !== '' ? [$hostname] : []));
         $zone = self::zoneId($provider, $layer['zone_id'] ?? '');
         $token = self::cdnToken($layer);
-        if ($zone === '' || $token === '' || (!self::scopeSupportsHtml($layer) && $hostname === '')) {
+        if ($zone === '' || $token === '' || $hosts === []) {
             return self::result($label, 'error', __('CDN purge needs a valid resource ID, credentials, and a hostname for asset-only layers.', 'ys-cache'));
         }
-        $limit = $provider === 'bunny' ? 5 : 100;
-        if (count($files) > $limit) {
-            return self::result($label, 'error', sprintf(__('This layer supports up to %d URLs per purge. Submit smaller batches.', 'ys-cache'), $limit));
-        }
+        $includes_alias = array_intersect($hosts, $aliases) !== [];
 
         if ($provider === 'cloudflare') {
             $email = sanitize_email(self::text($layer['auth_email'] ?? ''));
             $headers = $email === ''
                 ? ['Authorization' => 'Bearer ' . $token]
                 : ['X-Auth-Key' => $token, 'X-Auth-Email' => $email];
-            if ($targeted) {
-                $payload = ['files' => $files];
-            } elseif (!empty($layer['purge_entire_zone'])) {
-                $payload = ['purge_everything' => true];
-            } else {
-                $payload = ['hosts' => [$hostname !== '' ? $hostname : strtolower($site['host'])]];
+            $resource_url = 'https://api.cloudflare.com/client/v4/zones/' . $zone;
+            if ($includes_alias) {
+                $resource = self::readCdnResource($label, $resource_url, $headers);
+                if ($resource['status'] === 'error') {
+                    return $resource;
+                }
+                $document = $resource['document'];
+                $zone_info = is_array($document['result'] ?? null) ? $document['result'] : [];
+                $zone_name = self::hostname($zone_info['name'] ?? '');
+                if (($document['success'] ?? false) !== true || !empty($document['errors']) || ($zone_info['id'] ?? '') !== $zone
+                    || ($zone_info['status'] ?? '') !== 'active' || $zone_name === ''
+                    || array_filter($hosts, static fn (string $host): bool => $host !== $zone_name && !str_ends_with($host, '.' . $zone_name))) {
+                    return self::result($label, 'error', __('Cloudflare could not verify every configured alias in this zone. Use a separate CDN layer for aliases in another zone.', 'ys-cache'));
+                }
             }
-            return self::request($label, 'POST', 'https://api.cloudflare.com/client/v4/zones/' . $zone . '/purge_cache', $headers, $payload, true);
+            $endpoint = $resource_url . '/purge_cache';
+            if (!$targeted && !empty($layer['purge_entire_zone'])) {
+                return self::request($label, 'POST', $endpoint, $headers, ['purge_everything' => true], 200, $provider);
+            }
+            $key = $targeted ? 'files' : 'hosts';
+            return self::purgeBatches($label, $targeted ? $files : $hosts, 100,
+                static fn (array $batch): array => self::request($label, 'POST', $endpoint, $headers, [$key => $batch], 200, $provider));
         }
 
         if ($provider === 'gcore') {
-            $payload = $targeted ? ['urls' => array_values(array_unique(array_map([self::class, 'pathAndQuery'], $files)))] : ['paths' => []];
-            return self::request(
-                $label,
-                'POST',
-                'https://api.gcore.com/cdn/resources/' . $zone . '/purge',
-                ['Authorization' => 'APIKey ' . $token],
-                $payload
-            );
+            $headers = ['Authorization' => 'APIKey ' . $token];
+            $resource_url = 'https://api.gcore.com/cdn/resources/' . $zone;
+            if ($includes_alias) {
+                $resource = self::readCdnResource($label, $resource_url, $headers);
+                if ($resource['status'] === 'error') {
+                    return $resource;
+                }
+                $document = $resource['document'];
+                $configured = self::normalizeAliasHosts(array_merge([$document['cname'] ?? ''], (array) ($document['secondaryHostnames'] ?? [])));
+                if (self::text($document['id'] ?? '') !== $zone || !empty($document['deleted']) || !empty($document['suspended'])
+                    || ($document['active'] ?? true) === false || ($document['enabled'] ?? true) === false
+                    || ($document['status'] ?? 'active') !== 'active' || array_diff($hosts, $configured) !== []) {
+                    return self::result($label, 'error', __('Gcore could not verify every configured alias on this CDN resource.', 'ys-cache'));
+                }
+            }
+            $endpoint = $resource_url . '/purge';
+            if (!$targeted) {
+                return self::request($label, 'POST', $endpoint, $headers, ['paths' => []], 201, $provider);
+            }
+            $paths = array_values(array_unique(array_map([self::class, 'pathAndQuery'], $files)));
+            return self::purgeBatches($label, $paths, 100,
+                static fn (array $batch): array => self::request($label, 'POST', $endpoint, $headers, ['urls' => $batch], 201, $provider));
         }
 
         $headers = ['AccessKey' => $token];
+        if (count($files) > self::MAX_BUNNY_URLS) {
+            return self::result($label, 'error', sprintf(__('This layer supports up to %d URLs per purge. Submit smaller batches.', 'ys-cache'), self::MAX_BUNNY_URLS));
+        }
+        $resource_url = 'https://api.bunny.net/pullzone/' . $zone;
+        $resource = self::readCdnResource($label, $resource_url, $headers);
+        if ($resource['status'] === 'error') {
+            return $resource;
+        }
+        $document = $resource['document'];
+        $configured = self::normalizeAliasHosts(array_column((array) ($document['Hostnames'] ?? []), 'Value'));
+        if (self::text($document['Id'] ?? '') !== $zone || ($document['Enabled'] ?? true) === false
+            || !empty($document['Suspended']) || array_diff($hosts, $configured) !== []) {
+            return self::result($label, 'error', __('Bunny CDN could not verify every requested hostname on this Pull Zone.', 'ys-cache'));
+        }
         if (!$targeted) {
-            return self::request($label, 'POST', 'https://api.bunny.net/pullzone/' . $zone . '/purgeCache', $headers, []);
+            return self::request($label, 'POST', $resource_url . '/purgeCache', $headers, [], 204);
         }
 
         $directoryUrls = array_filter($files, static fn (string $url): bool => str_ends_with((string) wp_parse_url($url, PHP_URL_PATH), '/'));
-        if ($directoryUrls !== [] && !self::bunnySupportsExactPaths($zone, $headers, $directoryUrls)) {
+        // With IgnoreQueryStrings enabled, Bunny can broaden a slash URL to a wildcard purge.
+        if ($directoryUrls !== [] && ($document['IgnoreQueryStrings'] ?? null) !== false) {
             return self::result($label, 'error', __('Bunny CDN could not verify an exact purge for this URL. Check its Pull Zone hostname and Ignore Query Strings setting.', 'ys-cache'));
         }
 
         // Bunny takes one URL per API call.
-        foreach ($files as $url) {
-            $query = http_build_query(['url' => $url, 'exactPath' => 'true'], '', '&', PHP_QUERY_RFC3986);
-            $result = self::request($label, 'POST', 'https://api.bunny.net/purge?' . $query, $headers);
-            if ($result['status'] === 'error') {
-                return $result;
-            }
-        }
-        return $result;
+        return self::purgeBatches($label, $files, 1, static function (array $batch) use ($label, $headers): array {
+            $query = http_build_query(['url' => $batch[0], 'exactPath' => 'true', 'async' => 'false'], '', '&', PHP_QUERY_RFC3986);
+            return self::request($label, 'POST', 'https://api.bunny.net/purge?' . $query, $headers, null, 200);
+        });
     }
 
-    private static function bunnySupportsExactPaths(string $zone, array $headers, array $urls): bool
+    private static function readCdnResource(string $label, string $url, array $headers): array
     {
-        $response = wp_safe_remote_request('https://api.bunny.net/pullzone/' . $zone, [
+        $response = wp_safe_remote_request($url, [
             'method' => 'GET',
             'timeout' => 5,
             'redirection' => 0,
@@ -460,17 +594,38 @@ final class YSCacheProviders
             'limit_response_size' => 524288,
             'headers' => $headers + ['Accept' => 'application/json'],
         ]);
-        if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
-            return false;
+        $message = __('The CDN resource could not be verified. Check the configured resource and its read permission.', 'ys-cache');
+        if (is_wp_error($response)) {
+            return self::result($label, 'error', $message) + ['retryable' => true];
         }
-        $resource = json_decode(wp_remote_retrieve_body($response), true);
-        // With IgnoreQueryStrings enabled, Bunny can broaden a slash URL to a wildcard purge.
-        if ((string) ($resource['Id'] ?? '') !== $zone || ($resource['IgnoreQueryStrings'] ?? null) !== false || !is_array($resource['Hostnames'] ?? null)) {
-            return false;
+        $status = (int) wp_remote_retrieve_response_code($response);
+        $document = json_decode(wp_remote_retrieve_body($response), true);
+        if ($status !== 200 || !is_array($document)
+            || stripos((string) wp_remote_retrieve_header($response, 'content-type'), 'text/html') === 0) {
+            return self::result($label, 'error', $message, $status);
         }
-        $configured = array_map([self::class, 'hostname'], array_column($resource['Hostnames'], 'Value'));
-        $requested = array_map(static fn (string $url): string => strtolower((string) wp_parse_url($url, PHP_URL_HOST)), $urls);
-        return array_diff($requested, $configured) === [];
+        return ['status' => 'ok', 'document' => $document];
+    }
+
+    private static function purgeBatches(string $label, array $items, int $size, callable $send): array
+    {
+        if ($items === []) {
+            return self::result($label, 'skipped', __('No URLs apply to this CDN layer.', 'ys-cache'));
+        }
+        $batches = array_chunk($items, $size);
+        if (count($batches) > self::MAX_PURGE_BATCHES) {
+            return self::result($label, 'error', __('This CDN purge requires too many requests. Submit smaller batches.', 'ys-cache'));
+        }
+        foreach ($batches as $index => $batch) {
+            $result = $send($batch);
+            if ($result['status'] !== 'ok') {
+                if ($index > 0) {
+                    $result['message'] = sprintf(__('CDN purge stopped after %1$d of %2$d requests. %3$s', 'ys-cache'), $index, count($batches), $result['message']);
+                }
+                return $result;
+            }
+        }
+        return $result;
     }
 
     private static function cdnToken(array $layer): string
@@ -483,7 +638,7 @@ final class YSCacheProviders
         return $token;
     }
 
-    private static function request(string $label, string $method, string $url, array $headers, ?array $payload = null, bool $cloudflare = false): array
+    private static function request(string $label, string $method, string $url, array $headers, ?array $payload = null, ?int $expected = null, string $provider = ''): array
     {
         $headers['Accept'] = 'application/json';
         $args = [
@@ -491,7 +646,7 @@ final class YSCacheProviders
             'timeout' => 5,
             'redirection' => 0,
             'sslverify' => true,
-            'limit_response_size' => 32768,
+            'limit_response_size' => $provider === 'gcore' ? 524288 : 32768,
             'headers' => $headers,
         ];
         if ($payload !== null) {
@@ -510,13 +665,26 @@ final class YSCacheProviders
         }
 
         $status = (int) wp_remote_retrieve_response_code($response);
-        if ($status < 200 || $status >= 300 || stripos((string) wp_remote_retrieve_header($response, 'content-type'), 'text/html') === 0) {
+        if ($status < 200 || $status >= 300 || ($expected !== null && $status !== $expected)
+            || stripos((string) wp_remote_retrieve_header($response, 'content-type'), 'text/html') === 0) {
             return self::result($label, 'error', sprintf(__('Purge returned HTTP %d.', 'ys-cache'), $status), $status);
         }
-        if ($cloudflare) {
+        if ($provider === 'cloudflare') {
             $body = json_decode(wp_remote_retrieve_body($response), true);
-            if (($body['success'] ?? false) !== true) {
+            if (($body['success'] ?? false) !== true || !empty($body['errors'])) {
                 return self::result($label, 'error', __('Cloudflare did not accept the purge.', 'ys-cache'), $status);
+            }
+        } elseif ($provider === 'gcore') {
+            $body = json_decode(wp_remote_retrieve_body($response), true);
+            $key = array_key_first($payload ?? []);
+            $reported = $body[$key] ?? null;
+            $submitted = $payload[$key] ?? [];
+            if (is_array($reported)) {
+                sort($reported);
+                sort($submitted);
+            }
+            if ($reported !== $submitted) {
+                return self::result($label, 'error', __('Gcore did not confirm every requested purge path.', 'ys-cache'), $status);
             }
         }
         return self::result($label, 'ok', __('The provider accepted the purge.', 'ys-cache'), $status);
@@ -527,7 +695,7 @@ final class YSCacheProviders
         return compact('layer', 'status', 'message', 'http');
     }
 
-    private static function layerUrls(array $urls, array $site, array $sources, string $hostname, array $layer): array
+    private static function layerUrls(array $urls, array $site, array $sources, string $hostname, array $layer, array $aliases, array $html_hosts): array
     {
         $files = [];
         $scope = self::scope($layer);
@@ -538,7 +706,9 @@ final class YSCacheProviders
             if ($parts === [] || strpos(rawurldecode($parts['path'] . ($parts['query'] ?? '')), '*') !== false) {
                 continue;
             }
-            $is_cdn = $hostname !== '' && $parts['host'] === $hostname && $parts['port'] === 443;
+            $is_cdn = $hostname !== '' && $parts['host'] === $hostname && $parts['scheme'] === 'https' && $parts['port'] === 443;
+            $site_origin = self::sameOrigin($parts, $site) || (in_array($parts['host'], $aliases, true)
+                && $parts['scheme'] === $site['scheme'] && $parts['port'] === $site['port']);
             $decoded = self::publicPath($parts['path']);
             if ($decoded === null) {
                 continue;
@@ -550,15 +720,21 @@ final class YSCacheProviders
                     || !self::imagePath($parts['path'], $upload)) {
                     continue;
                 }
-            } elseif ((!self::sameOrigin($parts, $site) && !$is_cdn)
-                || ($kind === null && !$supportsHtml)
+            } elseif ((!$site_origin && !$is_cdn)
+                || ($kind === null && (!$site_origin || $html_hosts === []))
                 || ($kind !== null && !self::scopeAllowsAsset($scope, $kind))
-                || ($kind !== null && !$supportsHtml && self::assetKind($parts['path'], $sources['roots']) === null)) {
+                || ($kind !== null && (!$supportsHtml || $html_hosts === []) && self::assetKind($parts['path'], $sources['roots']) === null)) {
                 continue;
             }
 
-            $origin = $kind === null ? self::origin($site) : ($hostname === '' ? self::origin($parts) : 'https://' . $hostname);
-            $files[] = $origin . self::pathWithQuery($parts);
+            if ($kind === null || ($site_origin && $html_hosts !== [] && ($hostname === '' || in_array($hostname, $html_hosts, true)))) {
+                foreach ($html_hosts as $host) {
+                    $files[] = self::origin(array_replace($site, ['host' => $host])) . self::pathWithQuery($parts);
+                }
+            } else {
+                $origin = $hostname === '' ? self::origin($parts) : 'https://' . $hostname;
+                $files[] = $origin . self::pathWithQuery($parts);
+            }
         }
         return array_values(array_unique($files));
     }

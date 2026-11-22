@@ -4,6 +4,10 @@ namespace YangSheep\Cache {
     final class YSCache {
         public static array $calls = [];
 
+        public static function settings(): array {
+            return [ 'providers' => [ 'alias_hosts' => [ 'www.example.test' ] ] ];
+        }
+
         public static function purge( string $scope ): array {
             self::$calls[] = [ 'site', $scope ];
             return [];
@@ -105,6 +109,7 @@ namespace {
         $bar->nodes['ys-cache-purge-site']['parent'] === 'ys-cache-purge', 'The page and site actions share a toolbar menu.' );
     expect( $bar->nodes['ys-cache-purge']['meta']['tabindex'] === 0, 'The menu without a destination is keyboard reachable.' );
     expect( $GLOBALS['localization']['page'] === 'https://example.test/site/example-page/', 'Frontend uses the public URL without tracking parameters.' );
+    expect( $GLOBALS['localization']['aliases'] === [ 'www.example.test' ], 'Toolbar prompts accept saved site aliases.' );
     $_GET = [ 'p' => '123' ];
     $_SERVER['REQUEST_URI'] = '/site/?p=123';
     YSCacheAdminBar::enqueue();

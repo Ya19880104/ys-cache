@@ -209,8 +209,8 @@ msgid "Enable guest HTML caching when using YS CACHE"
 msgstr "使用 YS CACHE 時，啟用訪客 HTML 快取"
 
 #: templates/admin/settings.php:194
-msgid "Enabled server and CDN integrations follow this setting. CDN layers set to Manual only are cleared through manual purge actions."
-msgstr "已啟用的伺服器及 CDN 整合會依此設定執行。設為「僅手動清除」的 CDN 層需透過手動清除。"
+msgid "Server and CDN clearing runs in the background. CDN layers set to Manual only follow manual purge actions."
+msgstr "伺服器與 CDN 會在背景清除。設為「僅手動清除」的 CDN 層會跟隨手動清除操作。"
 
 #: templates/admin/settings.php:179
 msgid "Enter a lifetime of 1 second to 7 days that converts to whole seconds."
@@ -846,3 +846,51 @@ msgstr "YS CLOUD 支援全站清除。請使用「清除全站快取」。"
 #: templates/admin/settings.php:71
 msgid "Zone / Resource ID"
 msgstr "區域／資源 ID"
+
+msgid "Queued"
+msgstr "已排入佇列"
+
+msgid "Skipped"
+msgstr "已略過"
+
+msgid "Next background attempt: %s"
+msgstr "下次背景執行：%s"
+
+msgid "Website alias hostnames"
+msgstr "網站別名網域"
+
+msgid "Enter one hostname per line for alternate domains serving the same pages. Add a separate CDN layer when an alias uses a different CDN zone or resource."
+msgstr "每行填入一個提供相同頁面的別名主機名稱。別名若使用不同的 CDN Zone 或資源，請另外新增 CDN 層。"
+
+msgid "Inventory page cache generations updated."
+msgstr "已更新受庫存影響頁面的快取版本。"
+
+msgid "YS CLOUD supports site-wide clearing only. Inventory changes use page-level clearing."
+msgstr "YS CLOUD 僅支援整站清除。庫存變更採用單頁清除。"
+
+msgid "A site alias is assigned to more than one resource at the same CDN provider."
+msgstr "同一網站別名被指定至相同 CDN 供應商的多個資源。"
+
+msgid "Add the CDN website hostname to the site aliases before purging this layer."
+msgstr "請先將此 CDN 層的網站主機名稱加入網站別名，再執行清除。"
+
+msgid "Cloudflare could not verify every configured alias in this zone. Use a separate CDN layer for aliases in another zone."
+msgstr "Cloudflare 無法確認此 Zone 涵蓋全部設定的別名。若別名屬於其他 Zone，請另加 CDN 層。"
+
+msgid "Gcore could not verify every configured alias on this CDN resource."
+msgstr "Gcore 無法確認此 CDN 資源涵蓋全部設定的別名。"
+
+msgid "Bunny CDN could not verify every requested hostname on this Pull Zone."
+msgstr "Bunny CDN 無法確認此 Pull Zone 涵蓋全部要求清除的主機名稱。"
+
+msgid "The CDN resource could not be verified. Check the configured resource and its read permission."
+msgstr "無法驗證 CDN 資源。請檢查資源設定與讀取權限。"
+
+msgid "This CDN purge requires too many requests. Submit smaller batches."
+msgstr "本次 CDN 清除需要過多請求。請縮小每批清除範圍。"
+
+msgid "CDN purge stopped after %1$d of %2$d requests. %3$s"
+msgstr "CDN 清除在完成 %1$d／%2$d 個請求後停止。%3$s"
+
+msgid "Gcore did not confirm every requested purge path."
+msgstr "Gcore 未確認所有要求清除的路徑。"

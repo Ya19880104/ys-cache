@@ -199,6 +199,7 @@
                         enabled: field('litespeed_enabled'),
                         rules_verified: field('litespeed_rules_verified'),
                     },
+                    alias_hosts: field('alias_hosts'),
                     cdn,
                 },
             };
@@ -209,6 +210,7 @@
             owner.textContent = owner.dataset[ownership];
             if (data.results?.length) showResults(data.results);
             const savedCdn = data.cdn || [];
+            if (Array.isArray(data.alias_hosts)) form.elements.alias_hosts.value = data.alias_hosts.join('\n');
             list.querySelectorAll('[data-cdn-row]').forEach((row) => {
                 const fields = rowData(row);
                 const index = savedCdn.findIndex((saved) => saved.provider === fields.provider

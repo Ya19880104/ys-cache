@@ -28,6 +28,8 @@ Add each CDN layer from the origin outward and choose whether it follows the mai
 
 [Cloudflare](https://developers.cloudflare.com/api/resources/cache/methods/purge/) · [Bunny CDN](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) · [Gcore](https://docs.gcore.com/api-reference/cdn/tools/purge-cache)
 
+Under **CDN Layers → Website alias hostnames**, enter the alternate domains that serve the same public paths, one hostname per line. For an alias with separate CDN resources, configure an HTML-capable row for that hostname at each CDN layer it uses. Check a manual single-page purge on both hostnames after setup. Bunny CDN accepts up to 20 URLs per YS CACHE batch, including one URL for each applicable hostname.
+
 ### Bunny CDN API key
 
 1. Sign in to the Bunny dashboard and open **Account → API Key**. Copy the account API key. Ask the primary account owner if the key is unavailable to your account.
@@ -41,6 +43,12 @@ Add each CDN layer from the origin outward and choose whether it follows the mai
 ## Forms and lifetime
 
 WPForms, Fluent Forms, JetFormBuilder and Contact Form 7 are detected automatically. The plugin examines the current page’s blocks and shortcodes and checks rendered HTML for form markup and private tokens. A footer or builder template with a form affects every page where the form is rendered. Check both a form page and an ordinary page with anonymous requests. Extending the configured lifetime to seven days still respects the active nonce window and eligible responses.
+
+## Background clearing and inventory
+
+Keep WordPress Cron running to process queued changes. Content edits use a 15-second window and inventory uses a 60-second window before becoming eligible. Temporary transport errors, rate limits and server errors retry with backoff for up to 24 hours. Check the last result and next attempt under **Cache Settings → HTML Cache**. LiteSpeed uses an HTTP request to `wp-cron.php` so the worker can detect the server cache.
+
+WooCommerce inventory updates clear the affected product and its published languages. A stock availability change also clears the shop, relevant category and tag archives, and the front page. Add pages that embed stock-sensitive content with the `ys_cache_stock_purge_urls` filter. Origin integrations that only support site-wide clearing leave automatic inventory purges to existing expiration and manual site-wide clearing.
 
 ## 繁體中文
 
@@ -70,6 +78,8 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 
 [Cloudflare](https://developers.cloudflare.com/api/resources/cache/methods/purge/) · [Bunny CDN](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) · [Gcore](https://docs.gcore.com/api-reference/cdn/tools/purge-cache)
 
+在「CDN 層 → 網站別名網域」填入提供相同公開路徑的別名，一行一個主機名稱。若別名有獨立的 CDN 資源，請在該別名經過的每一層設定可傳遞 HTML 的項目。設定後，用同一頁測試主要與別名網域的手動單頁清除。Bunny CDN 每批最多處理 20 個網址，同一路徑在每個主機名稱各算一個網址。
+
 #### Bunny CDN API Key
 
 1. 登入 Bunny 控制台，開啟 **Account → API Key**，複製帳戶 API Key。若帳號看不到 Key，請由主帳號持有人處理。
@@ -83,3 +93,9 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 ### 表單和快取效期
 
 外掛自動偵測 WPForms、Fluent Forms、JetFormBuilder 與 Contact Form 7。檢查只針對當前頁面的區塊、短代碼和輸出的表單標記或私有 Token。若頁尾或共用版型含表單，每個載入它的頁面都會套用排除。請以未登入訪客分別測試表單頁和一般頁面。時效可填到七天，實際可命中時間仍受 nonce 時段及回應條件限制。
+
+### 背景清除與庫存
+
+請保持 WordPress Cron 運作，以處理排入佇列的變更。內容編輯先合併 15 秒，庫存變更先合併 60 秒，再由背景工作處理。連線中斷、限流和伺服器暫時錯誤會逐步拉長重試間隔，最長 24 小時。可在「快取設定 → HTML 快取」查看上次結果與下次嘗試時間。LiteSpeed 透過 HTTP 請求 `wp-cron.php`，讓背景工作能偵測伺服器快取。
+
+WooCommerce 庫存更新會清除受影響的商品頁及已發布的語系版本。可售狀態改變時，也會清除商店、相關分類與標籤彙整頁，以及首頁。若其他頁面嵌入會顯示庫存的內容，可以用 `ys_cache_stock_purge_urls` 加入清除範圍。若來源整合只支援整站清除，這些庫存變更會依原有快取效期更新，也可手動清除整站。

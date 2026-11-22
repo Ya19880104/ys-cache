@@ -55,6 +55,7 @@ final class YSCacheAdminBar {
             'nonce'    => wp_create_nonce( self::ACTION ),
             'page'     => self::currentPage(),
             'home'     => home_url( '/' ),
+            'aliases'  => YSCache::settings()['providers']['alias_hosts'] ?? [],
             'prompt'   => __( 'Enter the URL of the page you want to purge.', 'ys-cache' ),
             'invalid'  => __( 'Enter a valid URL on this site.', 'ys-cache' ),
             'pending'  => __( 'Purging cache…', 'ys-cache' ),

@@ -19,7 +19,8 @@
 
         const home = new URL(config.home);
         const target = new URL(page, home);
-        if (target.origin !== home.origin || target.username || target.password || target.search) {
+        const allowedHost = target.hostname === home.hostname || (config.aliases || []).includes(target.hostname);
+        if (!allowedHost || target.protocol !== home.protocol || target.port !== home.port || target.username || target.password || target.search) {
             throw new Error(config.invalid);
         }
         target.hash = '';

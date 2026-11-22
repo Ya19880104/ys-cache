@@ -191,7 +191,39 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <span class="ys-cache-switch-track" aria-hidden="true"></span>
                 <?php esc_html_e( 'Purge caches when published content changes', 'ys-cache' ); ?>
             </label>
-            <p class="description"><?php esc_html_e( 'Enabled server and CDN integrations follow this setting. CDN layers set to Manual only are cleared through manual purge actions.', 'ys-cache' ); ?></p>
+            <p class="description"><?php esc_html_e( 'Server and CDN clearing runs in the background. CDN layers set to Manual only follow manual purge actions.', 'ys-cache' ); ?></p>
+            <?php if ( ! empty( $lastAutoPurge['time'] ) ) : ?>
+                <?php
+                $purgeState = [
+                    'ok'      => __( 'Succeeded', 'ys-cache' ),
+                    'queued'  => __( 'Queued', 'ys-cache' ),
+                    'retry'   => __( 'Waiting to retry', 'ys-cache' ),
+                    'error'   => __( 'Failed', 'ys-cache' ),
+                    'skipped' => __( 'Skipped', 'ys-cache' ),
+                ][ $lastAutoPurge['status'] ?? '' ] ?? '';
+                ?>
+                <p class="description"><?php
+                    echo esc_html( sprintf(
+                        /* translators: 1: purge status, 2: date and time. */
+                        __( 'Last automatic purge: %1$s (%2$s)', 'ys-cache' ),
+                        $purgeState,
+                        wp_date( 'Y-m-d H:i:s', (int) $lastAutoPurge['time'] )
+                    ) );
+                ?></p>
+                <?php if ( ! empty( $lastAutoPurge['next_attempt'] ) ) : ?>
+                    <p class="description"><?php
+                        /* translators: %s: scheduled date and time. */
+                        echo esc_html( sprintf( __( 'Next background attempt: %s', 'ys-cache' ), wp_date( 'Y-m-d H:i:s', (int) $lastAutoPurge['next_attempt'] ) ) );
+                    ?></p>
+                <?php endif; ?>
+                <?php if ( ! empty( $lastAutoPurge['layers'] ) ) : ?>
+                    <ul class="ys-cache-results">
+                        <?php foreach ( $lastAutoPurge['layers'] as $result ) : ?>
+                            <li data-status="<?php echo esc_attr( $result['status'] ); ?>"><?php echo esc_html( str_replace( [ 'Enhance Nginx', 'Enhance' ], 'YS CLOUD', $result['layer'] . ' — ' . $result['message'] ) ); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                <?php endif; ?>
+            <?php endif; ?>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="exclusions" id="ys-cache-panel-exclusions" aria-labelledby="ys-cache-tab-exclusions" hidden>
             <h2><?php esc_html_e( 'Exclusions', 'ys-cache' ); ?></h2>
@@ -293,6 +325,12 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
             <p class="description"><?php esc_html_e( 'Order layers from origin to edge. Each enabled CDN layer can follow the site’s automatic purge setting or be set to manual only.', 'ys-cache' ); ?></p>
             <p class="description"><?php esc_html_e( 'To deliver HTML through a CDN, route the site’s canonical hostname through the provider in DNS. For static files, enter a dedicated CDN hostname and enable URL rewriting. Signed, private, and logged-in asset URLs keep their original host.', 'ys-cache' ); ?></p>
             <p class="description"><?php esc_html_e( 'Before allowing CDN HTML caching, verify bypass rules for cookies, query strings, authorization, and requests other than GET and HEAD.', 'ys-cache' ); ?></p>
+            <div class="ys-cache-grid ys-cache-asset-exclusions">
+                <label for="ys-cache-cdn-aliases"><?php esc_html_e( 'Website alias hostnames', 'ys-cache' ); ?>
+                    <textarea id="ys-cache-cdn-aliases" name="alias_hosts" rows="3" aria-describedby="ys-cache-cdn-aliases-help" placeholder="www.example.com"><?php echo esc_textarea( implode( "\n", $providers['alias_hosts'] ?? [] ) ); ?></textarea>
+                </label>
+            </div>
+            <p class="description" id="ys-cache-cdn-aliases-help"><?php esc_html_e( 'Enter one hostname per line for alternate domains serving the same pages. Add a separate CDN layer when an alias uses a different CDN zone or resource.', 'ys-cache' ); ?></p>
             <div id="ys-cache-cdn-list"><?php foreach ( $cdnRows as $index => $row ) { $renderRow( $row, $index ); } ?></div>
             <template id="ys-cache-cdn-template"><?php $renderRow( [] ); ?></template>
             <p><button type="button" class="button" data-cdn-add><?php esc_html_e( 'Add CDN layer', 'ys-cache' ); ?></button></p>
@@ -304,30 +342,6 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <label><input type="checkbox" name="enhance_enabled" <?php checked( ! empty( $enhance['enabled'] ) ); ?>> <?php esc_html_e( 'Enable YS CLOUD server cache purging', 'ys-cache' ); ?></label>
                 <label><input type="checkbox" name="enhance_clear_token"> <?php esc_html_e( 'Remove saved API token', 'ys-cache' ); ?></label>
             </div>
-            <?php if ( ! empty( $lastAutoPurge['time'] ) ) : ?>
-                <?php
-                $purgeState = [
-                    'ok'    => __( 'Succeeded', 'ys-cache' ),
-                    'retry' => __( 'Waiting to retry', 'ys-cache' ),
-                    'error' => __( 'Failed', 'ys-cache' ),
-                ][ $lastAutoPurge['status'] ?? '' ] ?? '';
-                ?>
-                <p class="description"><?php
-                    echo esc_html( sprintf(
-                        /* translators: 1: purge status, 2: date and time. */
-                        __( 'Last automatic purge: %1$s (%2$s)', 'ys-cache' ),
-                        $purgeState,
-                        wp_date( 'Y-m-d H:i:s', (int) $lastAutoPurge['time'] )
-                    ) );
-                ?></p>
-                <?php if ( ! empty( $lastAutoPurge['layers'] ) ) : ?>
-                    <ul class="ys-cache-results">
-                        <?php foreach ( $lastAutoPurge['layers'] as $result ) : ?>
-                            <li data-status="<?php echo esc_attr( $result['status'] ); ?>"><?php echo esc_html( str_replace( [ 'Enhance Nginx', 'Enhance' ], 'YS CLOUD', $result['layer'] . ' — ' . $result['message'] ) ); ?></li>
-                        <?php endforeach; ?>
-                    </ul>
-                <?php endif; ?>
-            <?php endif; ?>
             <div class="ys-cache-grid">
                 <label><?php esc_html_e( 'YS CLOUD control panel URL', 'ys-cache' ); ?>
                     <input type="url" name="enhance_url" placeholder="https://panel.example.com" value="<?php echo esc_attr( $enhance['url'] ?? '' ); ?>">

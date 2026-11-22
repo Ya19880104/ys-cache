@@ -31,7 +31,10 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         }
         return $value;
     }
-    function get_option( $name, $default = false ) { return $default; }
+    function get_option( $name, $default = false ) {
+        return $name === 'trp_settings' && $_SERVER['REQUEST_URI'] === '/stock-test-purge/'
+            ? [ 'publish-languages' => [ 'en_US', 'zh_TW' ] ] : $default;
+    }
     function get_site_option( $name, $default = false ) { return $default; }
     function wp_parse_url( $url ) { return parse_url( $url ); }
     function wp_normalize_path( $path ) { return str_replace( '\\', '/', $path ); }
@@ -68,6 +71,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
                 'enhance' => [ 'enabled' => ! $local && ! $native, 'delegate_html' => ! $local && ! $native, 'rules_verified' => $this->path !== '/unverified/' ],
                 'litespeed' => [ 'enabled' => $native, 'rules_verified' => $this->path !== '/native-unverified/' ],
                 'opcache' => [ 'enabled' => false ],
+                'alias_hosts' => [ 'store-alias.example.test' ],
                 'cdn' => $edge ? [[ 'provider' => 'cloudflare', 'enabled' => true, 'scope' => $this->path === '/edge-static/' ? 'static' : 'html',
                     'html_cache_verified' => $this->path !== '/edge-unverified/' ]] : [],
             ] ] );
@@ -101,6 +105,28 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     }
     if ( $_SERVER['REQUEST_METHOD'] === 'POST' && str_ends_with( $path, '-purge/' ) ) {
         header( 'Content-Type: application/json' );
+        if ( $path === '/stock-test-purge/' ) {
+            class TRP_Translate_Press {
+                public static function get_trp_instance(): self { return new self(); }
+                public function get_component( $name ): self { return $this; }
+                public function get_url_for_language( $lang, $url ): string {
+                    return $lang === 'zh_TW' ? str_replace( '/local-stock/', '/local-stock-zh/', $url ) : $url;
+                }
+            }
+            $variantResolver = new ReflectionMethod( $cache, 'translatedPurgeUrls' );
+            if ( PHP_VERSION_ID < 80100 ) {
+                $variantResolver->setAccessible( true );
+            }
+            $urls = $variantResolver->invoke( null, [ home_url() . '/local-stock/' ] );
+            echo json_encode( $cache::purgeStockPages( $urls, [] ) );
+            return;
+        }
+        if ( $path === '/alias-test-purge/' ) {
+            $sameSite = $cache::purgePage( 'http://store-alias.example.test:' . $_SERVER['SERVER_PORT'] . '/local-stock/' );
+            $unknown = $cache::purgePage( 'http://unconfigured.example.test:' . $_SERVER['SERVER_PORT'] . '/local-stock/' );
+            echo json_encode( [ $sameSite[0]['status'], $unknown[0]['status'] ] );
+            return;
+        }
         if ( $path === '/settings-roundtrip-purge/' ) {
             $saved = $cache::save( [ 'ttl_seconds' => 61, 'ttl_unit' => 'min', 'auto_purge' => false ] );
             echo json_encode( [ 'saved' => $saved ] + array_intersect_key( $cache::settings(), array_flip( [ 'ttl_seconds', 'ttl_unit', 'auto_purge' ] ) ) );
@@ -282,6 +308,19 @@ try {
     check( json_decode( $roundtrip, true ), [ 'saved' => true, 'ttl_seconds' => 61, 'ttl_unit' => 'min', 'auto_purge' => false ], 'Store an exact lifetime, display unit, and master auto purge choice' );
     [ , $headers ] = request( $address, '/native-stale-generation/' );
     check( $headers['x-litespeed-cache-control'] ?? '', 'no-cache,esi=on', 'An inflight guest page cannot repopulate native cache after a purge' );
+    foreach ( [ '/local-stock/', '/local-stock-zh/', '/local-stock-other/' ] as $path ) {
+        request( $address, $path );
+        [ , $headers ] = request( $address, $path );
+        check( $headers['x-ys-cache'] ?? '', 'HIT', 'Warm inventory fixture ' . $path );
+    }
+    [ $stock ] = request( $address, '/stock-test-purge/', [], 'POST' );
+    check( json_decode( $stock, true )[0]['status'] ?? '', 'ok', 'Scoped background stock purge succeeded' );
+    foreach ( [ '/local-stock/' => 'MISS', '/local-stock-zh/' => 'MISS', '/local-stock-other/' => 'HIT' ] as $path => $label ) {
+        [ , $headers ] = request( $address, $path );
+        check( $headers['x-ys-cache'] ?? '', $label, 'Inventory purge retains unrelated HTML ' . $path );
+    }
+    [ $alias ] = request( $address, '/alias-test-purge/', [], 'POST' );
+    check( json_decode( $alias, true ), [ 'ok', 'error' ], 'Manual page clearing accepts only known aliases' );
 } catch ( Throwable $error ) {
     fwrite( STDERR, $error->getMessage() . "\n" . (string) @file_get_contents( $log ) );
     $failure = true;

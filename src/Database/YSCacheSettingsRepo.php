@@ -43,10 +43,10 @@ final class YSCacheSettingsRepo {
         ];
     }
 
-    public static function get(): array {
+    public static function get( bool $fresh = false ): array {
         global $wpdb;
         $table = self::table();
-        if ( ! isset( self::$settings[ $table ] ) ) {
+        if ( $fresh || ! isset( self::$settings[ $table ] ) ) {
             $value = $wpdb->get_var( "SELECT setting_value FROM {$table} WHERE setting_name = 'settings'" );
             $stored = is_string( $value ) ? json_decode( $value, true ) : null;
             $stored = is_array( $stored ) ? $stored : [];
@@ -152,8 +152,20 @@ final class YSCacheSettingsRepo {
         ] );
     }
 
-    public static function changePurgeRecord( string $name, array $previous, ?array $next ): bool {
+    public static function changePurgeRecord( string $name, ?array $previous, ?array $next ): bool {
         global $wpdb;
+        if ( $previous === null ) {
+            $value = $next === null ? false : wp_json_encode( $next );
+            if ( ! is_string( $value ) ) {
+                return false;
+            }
+            $table = self::table();
+            return 1 === $wpdb->query( $wpdb->prepare(
+                "INSERT IGNORE INTO {$table} (setting_name, setting_value) VALUES (%s, %s)",
+                $name,
+                $value
+            ) );
+        }
         $expected = [ 'setting_name' => $name, 'setting_value' => wp_json_encode( $previous ) ];
         if ( $next === null ) {
             return 1 === $wpdb->delete( self::table(), $expected );
