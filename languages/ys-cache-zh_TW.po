@@ -1236,3 +1236,28 @@ msgstr "你的帳號沒有執行匯入的權限。"
 #: templates/admin/settings.php:568 src/Admin/YSCacheImportAdmin.php:61
 msgid "When you activate YS CACHE, it checks the active cache plugin and imports supported settings before enabling HTML caching."
 msgstr "啟用 YS CACHE 時，系統會檢查目前運作中的快取外掛，匯入支援的設定後再啟用 HTML 快取。"
+
+msgid "This source plugin version has not been verified for automatic import."
+msgstr "此來源外掛版本尚未通過自動匯入驗證。"
+
+msgid "Multiple supported cache plugins are active. Select one active source before importing."
+msgstr "目前有多個支援的快取外掛同時啟用。請先保留單一啟用中的來源，再執行匯入。"
+
+msgid "The active source plugin must be loaded to run its native cleanup."
+msgstr "必須先載入啟用中的來源外掛，才能執行其清理程序。"
+
+#, php-format
+msgid "Could not preserve these source exclusions (%s). Review the URL keywords and cookie name expressions before switching."
+msgstr "無法保留下列來源排除規則（%s）。請在切換前檢查網址關鍵字與 Cookie 名稱比對規則。"
+
+msgid "The previous cache had no recognized expiry. The existing YS CACHE lifetime was kept."
+msgstr "無法辨識原快取的到期設定，已保留 YS CACHE 目前的快取時效。"
+
+msgid "Review deferred scripts, delayed scripts and unused CSS separately in asset settings."
+msgstr "請在資源設定中分別檢查延後載入腳本、延遲執行腳本與未使用的 CSS。"
+
+msgid "Review the previous CDN configuration and connect any provider purge API in YS CACHE."
+msgstr "請檢查原有 CDN 設定，並在 YS CACHE 連接供應商的快取清除 API。"
+
+msgid "The CDN now rewrites JavaScript and CSS. Review font delivery separately."
+msgstr "CDN 現在會改寫 JavaScript 和 CSS 網址。請另外檢查字型檔案的傳送設定。"
