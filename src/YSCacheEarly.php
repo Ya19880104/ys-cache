@@ -87,6 +87,11 @@ final class YSCacheEarly {
         if ( is_link( $file ) || ( file_exists( $file ) && ! self::owned() && filesize( $file ) !== 0 ) ) {
             return false;
         }
+        // Content and settings can change while the drop-in is absent. Start a new
+        // generation before making previously detached storage reachable again.
+        if ( ! self::owned() && ! YSCacheEarlyStore::invalidateAll( $directory ) ) {
+            return false;
+        }
         $reader = realpath( YS_CACHE_DIR . 'templates/early-reader.php' );
         if ( ! $reader ) {
             return false;
