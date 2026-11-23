@@ -11,6 +11,7 @@ defined( 'ABSPATH' ) || exit;
 final class YSCache {
     private static ?self $instance = null;
     private bool $privateResponse = false;
+    private ?string $originCacheControl = null;
     private ?string $cachedHtml = null;
     private bool $frontendTemplate = false;
     private ?string $requestGeneration = null;
@@ -22,6 +23,7 @@ final class YSCache {
     private ?string $liteSpeedNonce = null;
     private int $liteSpeedExpiry = 0;
     private ?array $pendingSharedHtml = null;
+    private ?array $earlySnapshot = null;
 
     public static function instance(): self {
         return self::$instance ??= new self();
@@ -33,10 +35,22 @@ final class YSCache {
         }
         YSCacheAdminBar::register();
         YSCacheAssetOptimization::register();
+        YSCachePixelWarm::register();
+        YSCacheEarly::observeChanges();
+        if ( defined( 'YS_CACHE_PIXEL_FALLBACK' ) ) {
+            add_action( 'wp_head', [ YSCachePixel::class, 'restoreBrowserHome' ], PHP_INT_MIN );
+        }
+        if ( defined( 'YS_CACHE_PIXEL_KIND' ) ) {
+            // Reassert the transport's privacy guard before the native template callbacks.
+            add_action( 'send_headers', static fn() => self::sendPrivateNoStore(), PHP_INT_MAX );
+        }
 
         add_action( 'init', [ $this, 'holdExternalHtml' ], 0, 0 );
         add_action( 'parse_request', [ $this, 'captureGeneration' ], 0, 0 );
+        add_action( 'wp', [ $this, 'protectCartHeaders' ], PHP_INT_MAX );
         add_action( 'template_redirect', [ $this, 'protectPrivateResponse' ], PHP_INT_MAX );
+        // PixelYourSite adds its enqueue and no-script hooks during template_redirect.
+        add_action( 'template_redirect', [ $this, 'pixelResponse' ], PHP_INT_MAX );
         add_filter( 'template_include', [ $this, 'serveOrCapture' ], PHP_INT_MAX );
         add_filter( 'trp_translated_html', [ $this, 'rewriteTranslatedHtml' ], PHP_INT_MAX, 4 );
         add_filter( 'litespeed_buffer_before', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
@@ -60,6 +74,27 @@ final class YSCache {
         return $settings;
     }
 
+    public function pixelResponse(): void {
+        if ( ! defined( 'YS_CACHE_PIXEL_KIND' ) ) {
+            if ( array_key_exists( 'ys_cache_pixel', $_GET ) ) {
+                nocache_headers();
+                status_header( 404 );
+                exit;
+            }
+            return;
+        }
+        $settings = self::settings();
+        if ( empty( $settings['early_pixel_shell'] ) || ! self::usesLocalHtml( $settings )
+            || ! in_array( '/', YSCacheEarly::paths( $settings['early_paths'] ?? '' ), true )
+            || is_user_logged_in() || YSCacheIntegrations::bypass() || ! is_front_page() || is_404() ) {
+            nocache_headers();
+            status_header( 403 );
+            exit;
+        }
+        YSCachePixel::dynamicResponse( YS_CACHE_PIXEL_KIND );
+        exit;
+    }
+
     public static function enable( ?array $settings = null, ?string $rocketMigrationId = null ): bool {
         $before = self::settings();
         $settings = self::sanitize( $settings ?? $before, $before );
@@ -69,13 +104,13 @@ final class YSCache {
         }
 
         return self::blockingCache( $settings ) === '' && ( ! self::usesLocalHtml( $settings ) || YSCacheStorage::directory() !== '' ) &&
-            YSCacheSettingsRepo::invalidate() && YSCacheSettingsRepo::save( $settings );
+            self::persist( $settings, $before );
     }
 
     public static function disable(): bool {
         $settings = self::settings();
         $settings['enabled'] = false;
-        return YSCacheSettingsRepo::save( $settings );
+        return YSCacheEarly::remove() && YSCacheSettingsRepo::save( $settings );
     }
 
     public static function save( array $input ): bool {
@@ -85,7 +120,18 @@ final class YSCache {
             ( self::blockingCache( $settings ) !== '' || YSCacheStorage::directory() === '' ) ) {
             return false;
         }
-        return YSCacheSettingsRepo::invalidate() && YSCacheSettingsRepo::save( $settings );
+        return self::persist( $settings, $before );
+    }
+
+    private static function persist( array $settings, array $before ): bool {
+        if ( ! YSCacheSettingsRepo::invalidate() || ! YSCacheEarly::sync( $settings ) ) {
+            return false;
+        }
+        if ( YSCacheSettingsRepo::save( $settings ) ) {
+            return true;
+        }
+        YSCacheEarly::sync( $before );
+        return false;
     }
 
     public static function delegatesHtml( array $settings ): bool {
@@ -118,6 +164,8 @@ final class YSCache {
             'ttl_unit'        => in_array( $settings['ttl_unit'], [ 's', 'min', 'hr', 'day' ], true ) ? $settings['ttl_unit'] : 's',
             'auto_purge'      => ! empty( $settings['auto_purge'] ),
             'auto_detect'     => ! empty( $settings['auto_detect'] ),
+            'early_paths'     => implode( "\n", YSCacheEarly::paths( self::lines( $settings['early_paths'] ?? '' ) ) ),
+            'early_pixel_shell' => ! empty( $settings['early_pixel_shell'] ),
             'exclude_paths'   => self::lines( $settings['exclude_paths'] ),
             'exclude_cookies' => self::lines( $settings['exclude_cookies'] ),
             'exclude_agents'  => self::lines( $settings['exclude_agents'] ),
@@ -155,7 +203,7 @@ final class YSCache {
             }
         }
         $dropin = WP_CONTENT_DIR . '/advanced-cache.php';
-        if ( defined( 'WP_CACHE' ) && WP_CACHE && is_file( $dropin ) && filesize( $dropin ) > 0 ) {
+        if ( defined( 'WP_CACHE' ) && WP_CACHE && is_file( $dropin ) && filesize( $dropin ) > 0 && ! YSCacheEarly::owned() ) {
             return 'advanced-cache.php';
         }
         return '';
@@ -258,6 +306,12 @@ final class YSCache {
 
     public function captureGeneration(): void {
         $settings = self::settings();
+        $uri = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
+        if ( ! empty( $settings['early_paths'] ) && self::usesLocalHtml( $settings ) && YSCacheEarly::owned()
+            && in_array( $uri, YSCacheEarly::paths( $settings['early_paths'] ), true )
+            && YSCacheEarlyStore::requestPath( $_SERVER, $_COOKIE, YSCacheEarly::host() ) === $uri ) {
+            $this->earlySnapshot = YSCacheEarlyStore::snapshot( YSCacheEarly::directory(), $uri );
+        }
         if ( in_array( $_SERVER['REQUEST_METHOD'] ?? '', [ 'GET', 'HEAD' ], true ) && empty( $_SERVER['QUERY_STRING'] ) ) {
             // A render that began before a save can never repopulate the new generation.
             if ( self::delegatesToCloud( $settings ) ) {
@@ -268,7 +322,7 @@ final class YSCache {
         }
     }
 
-    private static function hasEdgeHtml( array $settings ): bool {
+    public static function hasEdgeHtml( array $settings ): bool {
         foreach ( (array) ( $settings['providers']['cdn'] ?? [] ) as $layer ) {
             if ( ! is_array( $layer ) || empty( $layer['enabled'] ) || empty( $layer['html_cache_verified'] ) ||
                 ! YSCacheProviders::scopeSupportsHtml( $layer ) ) {
@@ -396,6 +450,57 @@ final class YSCache {
         header( 'X-Accel-Expires: 0', true );
     }
 
+    public function protectCartHeaders(): void {
+        if ( headers_sent() ) {
+            return;
+        }
+        $settings = self::settings();
+        if ( ( ! self::usesLocalHtml( $settings ) && ! self::delegatesHtml( $settings ) &&
+            ! self::hasEdgeHtml( $settings ) && ! self::usesLiteSpeed( $settings ) ) || ! self::isCartOrCheckout() ) {
+            return;
+        }
+        self::sendPrivateNoStore();
+        if ( self::usesLiteSpeed( $settings ) ) {
+            YSCacheLiteSpeed::noCache();
+        }
+        // A vendor template can replace Cache-Control and exit before later WordPress hooks.
+        // Reassert it at the first output flush without replacing an existing PHP header callback.
+        ob_start( static function ( string $html ): string {
+            self::sendPrivateNoStore();
+            return $html;
+        }, 8192 );
+    }
+
+    private static function isCartOrCheckout(): bool {
+        if ( function_exists( 'WC' ) && ( is_cart() || is_checkout() ) ) {
+            return true;
+        }
+        if ( ! defined( 'YS_ECOMMERCE_VERSION' ) ) {
+            return false;
+        }
+        if ( get_query_var( 'ys_ec_checkout_partition', '' ) !== '' ) {
+            return true;
+        }
+        $post = get_queried_object();
+        if ( ! $post instanceof \WP_Post ) {
+            return false;
+        }
+        foreach ( [ 'cart', 'checkout' ] as $page ) {
+            if ( (int) $post->ID === (int) get_option( 'ys_ec_page_' . $page . '_id', 0 ) ||
+                has_shortcode( $post->post_content, 'ys_ec_' . $page ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function sendPrivateNoStore(): void {
+        if ( ! headers_sent() ) {
+            header( 'Cache-Control: private, no-cache, no-store, must-revalidate', true );
+            header( 'X-Accel-Expires: 0', true );
+        }
+    }
+
     public function protectPrivateResponse(): void {
         $settings = self::settings();
         $this->edgeHtml = self::hasEdgeHtml( $settings );
@@ -414,12 +519,18 @@ final class YSCache {
             }
         }
         // The event renderer can generate new IDs even on a request without a PHP session.
-        if ( YSCacheIntegrations::hasVisitorEventRenderer() ) {
+        if ( defined( 'YS_CACHE_PIXEL_FALLBACK' ) || ( YSCacheIntegrations::hasVisitorEventRenderer() && ! YSCachePixelWarm::isVerified() ) ) {
             $this->privateResponse = true;
         }
         if ( ! $this->liteSpeedHtml || $this->edgeHtml || $this->privateResponse ) {
             // Shared HTML caching needs an explicit eligibility decision.
-            header( 'Cache-Control: private, no-cache, no-store, must-revalidate', true );
+            $control = 'Cache-Control: private, no-cache, no-store, must-revalidate';
+            if ( ! $this->privateResponse && $this->earlySnapshot !== null ) {
+                // Only our own hold can be ignored when publishing to protected origin storage.
+                $this->originCacheControl = $control . ', ys-cache-hold="' . bin2hex( random_bytes( 8 ) ) . '"';
+                $control = $this->originCacheControl;
+            }
+            header( $control, true );
         }
         header( 'X-YS-Cache: BYPASS', true );
     }
@@ -611,6 +722,24 @@ final class YSCache {
 
         $this->frontendTemplate = true;
         $localContactForm = false;
+        if ( YSCachePixelWarm::isVerified() ) {
+            $path = self::cachePath( $settings, $localContactForm );
+            if ( $path === '/' && ! $this->privateResponse && $this->earlySnapshot !== null && ! $localContactForm
+                && self::usesLocalHtml( $settings ) && ! empty( $settings['early_pixel_shell'] ) && YSCachePixel::eligible()
+                && ! is_user_logged_in() && ! is_404() && $this->rewriteAssetsHere()
+                && self::blockingCache( $settings ) === '' && self::headersAllowCache( headers_list() )
+                && YSCacheIntegrations::nonceVariant() !== null ) {
+                $settings['ttl_seconds'] = self::pathLifetime( $settings['ttl_seconds'], $settings['ttl_paths'], '/' );
+                $this->capturePixelShell( $settings );
+            }
+            // A neutral build must never populate a normal page cache or release upstream HTML.
+            $this->excludeLiteSpeedResponse();
+            return $template;
+        }
+        if ( ! empty( $settings['early_pixel_shell'] ) && $this->privateResponse && self::usesLocalHtml( $settings )
+            && $this->earlySnapshot !== null && YSCacheIntegrations::hasVisitorEventRenderer() && YSCachePixel::eligible() ) {
+            YSCachePixelWarm::schedule( $settings );
+        }
         // Elementor already renders its dynamic widgets on every request. We can restrict
         // its existing document cache on session pages without sharing the full response.
         $nativeElementor = $this->privateResponse && defined( 'ELEMENTOR_VERSION' ) && self::usesLocalHtml( $settings )
@@ -697,6 +826,16 @@ final class YSCache {
         $remaining = null;
         $html = YSCacheStorage::read( $directory, $key, $settings['ttl_seconds'], $remaining );
         if ( $html !== null ) {
+            if ( $this->earlySnapshot !== null && $this->originCacheControl !== null && ! $localContactForm
+                && $_SERVER['REQUEST_METHOD'] === 'GET' && $this->rewriteAssetsHere()
+                && ! has_filter( 'ys_cache_allow_request' ) && ! has_filter( 'ys_cache_allow_html' ) ) {
+                $variant = YSCacheEarlyStore::requestVariant( $_SERVER );
+                if ( $variant !== null && YSCacheEarlyStore::claimRender( YSCacheEarly::directory(), YSCacheEarly::host(), $path, $variant ) ) {
+                    header( 'X-YS-Cache: MISS', true );
+                    $this->captureHtml( $settings, $nonce, $directory, $key, false, false, true );
+                    return $template;
+                }
+            }
             header( 'X-YS-Cache: HIT', true );
             $this->cachedHtml = $html;
             if ( $this->edgeHtml && $_SERVER['REQUEST_METHOD'] === 'GET' ) {
@@ -713,14 +852,14 @@ final class YSCache {
         return $template;
     }
 
-    private function captureHtml( array $settings, string $nonce, ?string $directory, ?string $key, bool $fastcgi = false, bool $localContactForm = false ): void {
+    private function captureHtml( array $settings, string $nonce, ?string $directory, ?string $key, bool $fastcgi = false, bool $localContactForm = false, bool $earlyOnly = false ): void {
         if ( ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' ) {
             return;
         }
         $baseline = $this->htmlResponseHeaders();
         $shared = $fastcgi || $this->edgeHtml ? $this->sharedHtmlState( $nonce, $settings['ttl_seconds'], $fastcgi ) : null;
         $complete = true;
-        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm ): string {
+        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm, $earlyOnly ): string {
             if ( !( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
                 $complete = false;
                 return $html;
@@ -740,12 +879,61 @@ final class YSCache {
             }
 
             if ( $directory !== null ) {
-                YSCacheStorage::write( $directory, $key, $html );
+                if ( ! $earlyOnly ) {
+                    YSCacheStorage::write( $directory, $key, $html );
+                }
+                if ( ! $localContactForm && $this->rewriteAssetsHere() ) {
+                    $this->storeEarly( $settings, $responseHtml, $baseline );
+                }
             }
             if ( $shared !== null ) {
                 $this->releaseSharedHtml( $html, $shared );
             }
             return $responseHtml;
+        } );
+    }
+
+    private function storeEarly( array $settings, string $html, array $headers ): void {
+        if ( headers_sent() || $this->earlySnapshot === null || ! $this->requestGenerationUnchanged() || has_filter( 'ys_cache_allow_request' )
+            || has_filter( 'ys_cache_allow_html' ) || is_user_logged_in() || ! self::headersAllowCache( $headers ) ) {
+            return;
+        }
+        if ( $this->originCacheControl === null || ! in_array( $this->originCacheControl, $headers, true ) ) {
+            return;
+        }
+        $headers = array_values( array_diff( $headers, [ $this->originCacheControl ] ) );
+        if ( self::headersProhibitSharedCache( $headers ) ) {
+            return;
+        }
+        $variant = YSCacheEarlyStore::requestVariant( $_SERVER );
+        $path = YSCacheEarlyStore::requestPath( $_SERVER, $_COOKIE, YSCacheEarly::host() );
+        $ttl = YSCacheIntegrations::externalHtmlTtl( $settings['ttl_seconds'] );
+        if ( $variant !== null && $path !== null && $ttl > 0 ) {
+            $cartNonce = defined( 'YS_ECOMMERCE_VERSION' ) && YSCacheIntegrations::nonceVariant() !== null
+                ? wp_create_nonce( 'ys_ec_cart_nonce' ) : null;
+            YSCacheEarlyStore::write( YSCacheEarly::directory(), YSCacheEarly::host(), $path, $this->earlySnapshot, $headers, $html, $ttl, $variant, $cartNonce );
+        }
+    }
+
+    private function capturePixelShell( array $settings ): void {
+        $baseline = $this->htmlResponseHeaders();
+        $complete = true;
+        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $settings ): string {
+            if ( ! ( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
+                $complete = false;
+                return $html;
+            }
+            $status = http_response_code();
+            if ( ! $complete || headers_sent() || ( $status !== false && $status !== 200 ) || $this->htmlResponseHeaders() !== $baseline
+                || ! self::isCompleteHtml( $html ) || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE )
+                || preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) ) {
+                return $html;
+            }
+            $shell = YSCachePixel::shell( $html );
+            if ( $shell !== null && YSCacheIntegrations::cacheableHtml( $shell ) && apply_filters( 'ys_cache_allow_html', true, $shell ) ) {
+                $this->storeEarly( $settings, $this->rewriteAssets( $shell, $settings['providers'] ), $baseline );
+            }
+            return $html;
         } );
     }
 
@@ -801,7 +989,7 @@ final class YSCache {
 
     private function captureAssets( array $providers ): void {
         if ( ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' || ! $this->rewriteAssetsHere() ||
-            ! YSCacheProviders::hasUrlRewriting( $providers ) ) {
+            ( ! YSCacheProviders::hasUrlRewriting( $providers ) && ( ! function_exists( 'is_front_page' ) || ! is_front_page() ) ) ) {
             return;
         }
         ob_start( function ( string $html, int $phase ) use ( $providers ): string {
@@ -820,8 +1008,11 @@ final class YSCache {
     }
 
     private function rewriteAssets( string $html, array $providers ): string {
-        return $this->rewriteAssetsHere() && preg_match( '~<!doctype\s+html|<html(?:\s|>)~i', substr( $html, 0, 4096 ) )
-            ? YSCacheProviders::rewriteHtml( $html, $providers ) : $html;
+        if ( ! $this->rewriteAssetsHere() || ! preg_match( '~<!doctype\s+html|<html(?:\s|>)~i', substr( $html, 0, 4096 ) ) ) {
+            return $html;
+        }
+        $html = YSCacheProviders::rewriteHtml( $html, $providers );
+        return str_contains( $html, 'ysslide-swiper' ) ? YSCacheCarousel::rewriteHtml( $html ) : $html;
     }
 
     public function rewriteTranslatedHtml( string $html, $language, $source, $preview ): string {
@@ -829,6 +1020,9 @@ final class YSCache {
             return $html;
         }
         $html = YSCacheProviders::rewriteHtml( $html, self::settings()['providers'] );
+        if ( str_contains( $html, 'ysslide-swiper' ) ) {
+            $html = YSCacheCarousel::rewriteHtml( $html );
+        }
         if ( $this->pendingSharedHtml !== null ) {
             $this->releaseSharedHtml( $html, $this->pendingSharedHtml, true );
             $this->pendingSharedHtml = null;

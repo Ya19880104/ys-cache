@@ -235,6 +235,14 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 </div>
             </div>
             <p class="description" id="ys-cache-lifetime-help"><?php esc_html_e( 'Choose a lifetime from 1 second through 7 days. Cached HTML can expire sooner when a guest security token is due to change.', 'ys-cache' ); ?></p>
+            <label for="ys-cache-early-paths"><?php esc_html_e( 'Early guest HTML cache paths', 'ys-cache' ); ?></label>
+            <textarea id="ys-cache-early-paths" name="early_paths" rows="2" maxlength="12000" placeholder="/"><?php echo esc_textarea( $settings['early_paths'] ?? '' ); ?></textarea>
+            <p class="description"><?php esc_html_e( 'Enter one exact public path per line. Eligible HTTPS requests can serve HTML before WordPress starts. Choose pages with the same public content for anonymous visitors. Requires WP_CACHE.', 'ys-cache' ); ?></p>
+            <label class="ys-cache-switch">
+                <input name="early_pixel_shell" type="checkbox" role="switch" <?php checked( ! empty( $settings['early_pixel_shell'] ) ); ?>>
+                <span class="ys-cache-switch-track" aria-hidden="true"></span>
+                <?php esc_html_e( 'Load private PixelYourSite tracking separately on supported direct homepage visits (beta)', 'ys-cache' ); ?>
+            </label>
             <h3><?php esc_html_e( 'Automatic purge', 'ys-cache' ); ?></h3>
             <label class="ys-cache-switch">
                 <input name="auto_purge" type="checkbox" role="switch" <?php checked( ! empty( $settings['auto_purge'] ) ); ?>>

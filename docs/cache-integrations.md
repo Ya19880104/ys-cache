@@ -62,9 +62,21 @@ To check the result, make two anonymous GET requests to the same URL with no que
 
 ## Elementor fragments with PixelYourSite
 
-When a guest page contains visitor-specific PixelYourSite output, the full HTML stays private and returns `X-YS-Cache: BYPASS`. With native Elementor Element Caching active, eligible published singular pages in local YS CACHE mode can reuse an Elementor document fragment. Elementor continues to handle dynamic CSS, JavaScript and deferred widgets. PixelYourSite uses the site's existing settings to produce each visitor's output.
+By default, a guest page containing visitor-specific PixelYourSite output keeps the full HTML private and returns `X-YS-Cache: BYPASS`. With native Elementor Element Caching active, eligible published singular pages in local YS CACHE mode can reuse an Elementor document fragment. Elementor continues to handle dynamic CSS, JavaScript and deferred widgets. PixelYourSite uses the site's existing settings to produce each visitor's output.
 
 On an origin response, `X-YS-Elementor-Cache: HIT` means Elementor reused a native document fragment. `X-YS-Elementor-Cache: MISS` means the native lookup found no reusable fragment. The header appears only when an eligible lookup takes place. YS CACHE lifetime limits and purges apply to these cached documents.
+
+## Early guest HTML and private PixelYourSite (Beta)
+
+Static CDN layers keep their URL rewriting and purge settings. When a verified CDN layer owns HTML caching on the canonical host, it continues to control the HTML response and the early reader stays inactive.
+
+In **Cache settings → HTML cache**, enter one exact public path per line in **Early guest HTML cache paths**. This option requires local YS CACHE HTML, a single-site WordPress installation on HTTPS with `WP_CACHE` enabled, and an available `advanced-cache.php` drop-in. Choose public pages that give anonymous visitors the same content. Cookies, authorization, query strings and requests that need private content continue through WordPress. The early response preserves compatible origin security headers.
+
+To test PixelYourSite on the homepage, add `/` to the path list and turn on **Load private PixelYourSite tracking separately on supported direct homepage visits (beta)**. The beta checks the installed PixelYourSite version, tracking settings and rendered markup. It covers direct desktop homepage requests without cookies, referrers or query strings, using the same supported browser, language and device variant as the warmed copy. Supported requests load visitor-specific tracking in private same-origin responses. Visits with campaign parameters, referrals, user sessions, mobile or unsupported browsers continue through normal WordPress and PixelYourSite handling.
+
+The first eligible miss queues a same-site HTTPS request with no visitor cookies or credentials. PHP-FPM can start the warm request after completing the visitor response, and WordPress Cron handles queued work on other hosts. A site uses one pending warm job and a two-minute cooldown. Use the canonical HTTPS hostname for the loopback. If the host provides private origin DNS, resolve that same hostname to the origin while keeping its valid TLS certificate and hostname. A blocked or unsuccessful warm leaves the visitor path dynamic.
+
+On the test site, open the canonical homepage directly in two separate clean browser sessions with the same desktop browser and language. Keep the Network panel’s **Disable cache** option off so it does not add cache-bypass request headers. Look for `X-YS-Cache: HIT` and `X-YS-Cache-Engine: early` on a new visit after the warm job finishes. Check that the tracking requests complete independently, retain distinct event IDs and carry private cache headers. Test a referral URL, login, mobile browser and cart as well.
 
 ## Forms and lifetime
 
@@ -156,9 +168,21 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 
 ### Elementor 片段快取與 PixelYourSite
 
-若訪客頁含有 PixelYourSite 的個人化輸出，完整 HTML 會維持私有並回傳 `X-YS-Cache: BYPASS`。啟用 Elementor 原生元件快取後，本機 YS CACHE 模式下符合條件的已發布單一內容頁可重用 Elementor 文件片段。Elementor 照常處理動態 CSS、JavaScript 與延後渲染的小工具。PixelYourSite 依站上既有設定產生各訪客的輸出。
+預設情況下，若訪客頁含有 PixelYourSite 的個人化輸出，完整 HTML 會維持私有並回傳 `X-YS-Cache: BYPASS`。啟用 Elementor 原生元件快取後，本機 YS CACHE 模式下符合條件的已發布單一內容頁可重用 Elementor 文件片段。Elementor 照常處理動態 CSS、JavaScript 與延後渲染的小工具。PixelYourSite 依站上既有設定產生各訪客的輸出。
 
 來源站回應的 `X-YS-Elementor-Cache: HIT` 表示 Elementor 重用了原生文件片段。`X-YS-Elementor-Cache: MISS` 表示原生查詢當時沒有可重用的片段。僅在符合條件且實際查詢時才會出現此標頭。YS CACHE 的效期限制及清除操作也適用於這些快取文件。
+
+### 訪客 HTML 提前快取與 PixelYourSite（Beta）
+
+靜態 CDN 層會沿用原有的網址改寫與清除設定。若已驗證的 CDN 層負責主網域的 HTML 快取，HTML 回應由該層繼續管理，提前讀取器會停用。
+
+在「快取設定 → HTML 快取」的「訪客 HTML 提前快取路徑」每行輸入一個確切的公開路徑。此功能需要本機 YS CACHE HTML 快取、已開啟 `WP_CACHE` 的 HTTPS 單站 WordPress，以及可由 YS CACHE 使用的 `advanced-cache.php`。請選擇向所有匿名訪客提供相同內容的頁面。帶 Cookie、授權標頭、查詢字串或需載入私人內容的請求會由 WordPress 處理。提前快取的回應會保留相容的來源安全標頭。
+
+要在首頁測試 PixelYourSite，請將 `/` 加入路徑清單，再開啟「符合條件的直接首頁造訪會個別載入 PixelYourSite 私有追蹤資料（Beta）」。Beta 功能會檢查 PixelYourSite 版本、追蹤設定與實際輸出。它適用於無 Cookie、來源網址或查詢字串的直接桌機首頁造訪，瀏覽器、語言和裝置須符合已預熱的版本。符合條件的請求會各自從同站載入私有追蹤資料。含行銷參數、來源網址、使用者工作階段、行動瀏覽器或其他未支援瀏覽器的請求會照常由 WordPress 和 PixelYourSite 處理。
+
+符合條件的首次未命中會排入同站 HTTPS 預熱，請求不帶訪客 Cookie 或憑證。PHP-FPM 可在完成訪客回應後啟動預熱，其他主機可由 WordPress Cron 處理排程。每站同時只有一筆待處理預熱，間隔至少兩分鐘。預熱會連到網站的正式 HTTPS 主機名稱。若主機提供私有來源 DNS，可讓同一主機名稱解析至來源站並保留有效的 TLS 憑證及主機名稱。預熱遭攔截或失敗時，訪客會繼續使用動態首頁。
+
+請在測試站用相同桌機瀏覽器和語言，分別在兩個乾淨的瀏覽工作階段直接開啟正式首頁網址。保持開發工具「停用快取」選項關閉，避免測試請求帶有繞過快取的標頭。預熱完成後，確認新訪客的主文件帶有 `X-YS-Cache: HIT` 與 `X-YS-Cache-Engine: early`。確認各次造訪的追蹤請求都能完成，事件 ID 各自獨立，回應使用私有快取標頭。也請測試帶來源的造訪、登入、行動瀏覽器和購物車。
 
 ### 表單和快取效期
 

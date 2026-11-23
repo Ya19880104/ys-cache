@@ -35,6 +35,8 @@ final class YSCacheSettingsRepo {
             'ttl_unit'        => 's',
             'auto_purge'      => true,
             'auto_detect'     => true,
+            'early_paths'     => '',
+            'early_pixel_shell' => false,
             'exclude_paths'   => '',
             'exclude_cookies' => '',
             'exclude_agents'  => '',
@@ -89,6 +91,9 @@ final class YSCacheSettingsRepo {
 
     public static function invalidate(): bool {
         global $wpdb;
+        if ( class_exists( '\YangSheep\Cache\YSCacheEarly' ) && ! \YangSheep\Cache\YSCacheEarly::invalidate() ) {
+            return false;
+        }
         return false !== $wpdb->replace( self::table(), [
             'setting_name'  => 'generation',
             'setting_value' => wp_generate_uuid4(),
@@ -113,6 +118,9 @@ final class YSCacheSettingsRepo {
 
     public static function invalidatePage( string $path ): bool {
         global $wpdb;
+        if ( class_exists( '\YangSheep\Cache\YSCacheEarly' ) && ! \YangSheep\Cache\YSCacheEarly::invalidate( $path ) ) {
+            return false;
+        }
         $table = self::table();
         if ( false === $wpdb->replace( $table, [
             'setting_name'  => self::pageKey( $path ),

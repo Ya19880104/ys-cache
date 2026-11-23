@@ -22,7 +22,11 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     function is_embed() { return false; }
     function is_customize_preview() { return false; }
     function is_singular() { return false; }
-    function add_action( ...$args ) {}
+    function add_action( ...$args ) {
+        if ( $args[0] === 'wp' && is_array( $args[1] ) && $args[1][1] === 'protectCartHeaders' ) {
+            $GLOBALS['fixture_cart_header_hook'] = $args[1];
+        }
+    }
     function add_filter( ...$args ) {}
     function has_action( ...$args ) { return false; }
     function apply_filters( $name, $value ) {
@@ -105,7 +109,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         public function query( string $query ): int { return 0; }
     };
 
-    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheLiteSpeed', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
+    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEarly', 'YSCachePixelWarm', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheLiteSpeed', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
         require ABSPATH . 'src/' . $class . '.php';
     }
     $cache = YangSheep\Cache\YSCache::instance();
@@ -171,6 +175,27 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         header( 'Cache-Control: private' );
     }
     $cache->protectPrivateResponse();
+    if ( in_array( $path, [ '/local-late-woo-cart/', '/local-late-ys-cart/', '/local-late-non-cart/' ], true ) ) {
+        if ( $path === '/local-late-woo-cart/' ) {
+            function WC() {}
+            function is_cart() { return true; }
+            function is_checkout() { return false; }
+        }
+        if ( $path === '/local-late-ys-cart/' ) {
+            define( 'YS_ECOMMERCE_VERSION', 'test' );
+            function get_query_var( $name, $default ) {
+                return $name === 'ys_ec_checkout_partition' ? 'fixture' : $default;
+            }
+        }
+        header_register_callback( static function (): void {
+            header( 'X-Fixture-Header-Callback: preserved' );
+        } );
+        ( $GLOBALS['fixture_cart_header_hook'] )();
+        // Emulate a WooCommerce Coming Soon callback whose template_include handler exits.
+        header( 'Cache-Control: max-age=60', true );
+        echo '<!doctype html><html><p>Coming soon</p></html>';
+        exit;
+    }
     if ( $cache->serveOrCapture( 'test-template' ) !== 'test-template' ) {
         $cache->renderCachedPage();
         return;
@@ -293,6 +318,15 @@ try {
     }
     check( glob( $root . '/ys-cache-*' ), [], 'Delegated mode did not even create a local cache directory' );
     [ , $headers ] = request( $address, '/local/' );
+    foreach ( [ '/local-late-woo-cart/', '/local-late-ys-cart/' ] as $path ) {
+        [ $body, $cartHeaders ] = request( $address, $path );
+        check( $body, '<!doctype html><html><p>Coming soon</p></html>', $path . ' vendor page body' );
+        check( $cartHeaders['cache-control'] ?? '', 'private, no-cache, no-store, must-revalidate', $path . ' late replacement cannot publish cart headers' );
+        check( $cartHeaders['x-accel-expires'] ?? '', '0', $path . ' origin cache held' );
+        check( $cartHeaders['x-fixture-header-callback'] ?? '', 'preserved', $path . ' existing header callback retained' );
+    }
+    [ , $nonCartHeaders ] = request( $address, '/local-late-non-cart/' );
+    check( $nonCartHeaders['cache-control'] ?? '', 'max-age=60', 'unrelated route keeps its vendor policy' );
     check( $headers['x-ys-cache'] ?? '', 'MISS', 'Local cache is available after switching back' );
     check( count( glob( $root . '/ys-cache-*/*/*.html' ) ), 1, 'Local cache writes a file in local mode' );
     [ , $headers ] = request( $address, '/local/' );

@@ -461,11 +461,13 @@ final class YSCacheIntegrations {
 			return false;
 		}
 		global $wp_filter;
-		foreach ( $wp_filter['wp_enqueue_scripts']->callbacks ?? [] as $callbacks ) {
-			foreach ( $callbacks as $callback ) {
-				$handler = $callback['function'];
-				if ( is_array( $handler ) && $handler[0] instanceof \PixelYourSite\EventsManager && $handler[1] === 'outputData' ) {
-					return true;
+		foreach ( [ 'wp_enqueue_scripts' => 'outputData', 'wp_footer' => 'outputNoScriptData' ] as $hook => $method ) {
+			foreach ( $wp_filter[ $hook ]->callbacks ?? [] as $callbacks ) {
+				foreach ( $callbacks as $callback ) {
+					$handler = $callback['function'];
+					if ( is_array( $handler ) && $handler[0] instanceof \PixelYourSite\EventsManager && $handler[1] === $method ) {
+						return true;
+					}
 				}
 			}
 		}

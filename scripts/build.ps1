@@ -30,6 +30,8 @@ $mainFiles = @(
     'docs/nginx-cache.md',
     'ys-cache.php',
     'assets/css/ys-cache-admin.css',
+    'assets/css/ys-cache-carousel.css',
+    'assets/js/ys-cache-carousel.js',
     'assets/js/ys-cache-admin.js',
     'assets/js/ys-cache-admin-bar.js',
     'assets/js/ys-cache-import.js',
@@ -45,6 +47,12 @@ $mainFiles = @(
     'src/YSCacheAssetOptimization.php',
     'src/YSCacheCdnDiscovery.php',
     'src/YSCacheElementor.php',
+    'src/YSCacheEarly.php',
+    'src/YSCacheEarlyStore.php',
+    'src/YSCacheCarousel.php',
+    'src/YSCachePixel.php',
+    'src/YSCachePixelWarm.php',
+    'src/YSCachePixelTransport.php',
     'src/YSCacheEnhanceIntegration.php',
     'src/YSCacheEnhancePurge.php',
     'src/YSCacheIntegrations.php',
@@ -55,6 +63,7 @@ $mainFiles = @(
     'src/YSCacheStorage.php',
     'templates/admin/settings.php',
     'templates/cached-page.php',
+    'templates/early-reader.php',
     'vendor/autoload.php'
 )
 $hubFiles = @(
