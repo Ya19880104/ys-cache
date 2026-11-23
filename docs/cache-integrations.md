@@ -8,6 +8,10 @@ In **Cache Management → Integrations → LiteSpeed Cache**, check detection be
 
 Entire-site and single-page clearing dispatch to LiteSpeed first. Content updates use the main automatic clearing switch and each CDN layer’s own follow setting. If YS CACHE cannot confirm origin dispatch, it pauses the CDN purge for that run. Verify origin eviction and subsequent edge refresh on the host, including on translated URLs. [LiteSpeed WordPress cache API](https://docs.litespeedtech.com/lscache/lscwp/api/)
 
+## Nginx Cache (Beta)
+
+Standalone Nginx FastCGI caching requires a host-configured, authenticated loopback listener. Open **Cache Management → Integrations → Nginx Cache (Beta)** and check the connection and native bypass rules before enabling. Nginx owns HTML storage and purges the origin before CDN. Set up the public cache key and loopback purge routes together. [Nginx host configuration](nginx-cache.md)
+
 ## OPcache
 
 OPcache resets PHP’s in-memory opcode cache for the serving PHP runtime. This requires the extension and permission to call `opcache_reset()`. A WordPress request does not reset other isolated PHP pools. [PHP manual](https://www.php.net/manual/en/function.opcache-reset.php)
@@ -24,9 +28,17 @@ Configure the delivery hostname with your CDN first. Keep website HTML on the ca
 | Static resources | No | JS, CSS, images, fonts and supported media |
 | HTML, JS and CSS | Yes | JS and CSS |
 
-Add each CDN layer from the origin outward and choose whether it follows the main content-update purge setting. Resource discovery requires a Cloudflare token with Zone Read and Cache Purge, a Bunny CDN account API key, or a Gcore customer API token. Discovery finds existing resources. To purge a CNAME-only layer, also configure its CDN provider and credential. Test the first and second guest requests in each published language. The translated image should keep its language-specific path and use the configured CNAME wherever it is eligible. Keep CSP and cross-origin settings consistent with your delivery host.
+Add each CDN layer from the origin outward and choose whether it follows the main content-update purge setting. **Find resource ID** looks up an existing provider resource. Choose the provider and enter its credential, then enter the delivery hostname or fill in a known resource ID for verification. HTML layers with a blank hostname use the WordPress site hostname. Asset-only layers require the actual CDN delivery hostname, including when the resource ID is known.
 
-[Cloudflare](https://developers.cloudflare.com/api/resources/cache/methods/purge/) · [Bunny CDN](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) · [Gcore](https://docs.gcore.com/api-reference/cdn/tools/purge-cache)
+| Provider | Resource ID | Credential |
+| --- | --- | --- |
+| Cloudflare | Zone ID | API token scoped to the zone, with Zone Read for hostname lookup and Cache Purge for clearing. [List Zones](https://developers.cloudflare.com/api/resources/zones/methods/list/) · [Purge cache](https://developers.cloudflare.com/api/resources/cache/methods/purge/) |
+| Bunny CDN | Pull Zone ID | Account API key. Match a hostname already attached to the Pull Zone. [List Pull Zones](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) |
+| Gcore | CDN resource ID | Gcore customer API token with IAM/CDN role access to read the resource and clear its cache. Match its primary or secondary delivery hostname. [CDN resources](https://docs.gcore.com/api-reference/cdn/cdn-resources/get-cdn-resources-list) |
+
+Lookup confirms that the credential can read an existing resource. To verify cache clearing, enable API purge, save, then check a targeted purge against that resource. A provider can accept a purge before all of its CDN locations have applied it.
+
+For asset URL rewriting alone, select **CNAME** and fill in the delivery hostname already configured at the provider. Select the static asset scope and turn on rewriting. Configure DNS, TLS and origin delivery at the CDN provider. This layer handles WordPress URL rewriting and has no resource lookup or API purge. To use API purge, choose the corresponding supported provider and connect its resource. Test rewritten images, scripts and styles in each published language. Keep CSP and cross-origin settings consistent with your delivery hostname.
 
 Under **CDN Layers → Website alias hostnames**, enter the alternate domains that serve the same public paths, one hostname per line. For an alias with separate CDN resources, configure an HTML-capable row for that hostname at each CDN layer it uses. Check a manual single-page purge on both hostnames after setup. Bunny CDN accepts up to 20 URLs per YS CACHE batch, including one URL for each applicable hostname.
 
@@ -84,6 +96,10 @@ WooCommerce inventory updates clear the affected product and its published langu
 
 全站和單頁清除先送到 LiteSpeed。更新內容時依主設定自動清除，CDN 各層可選擇是否跟隨。若 YS CACHE 無法確認來源已接手清除，該次會暫停清除 CDN。請在實際主機驗證來源舊快取已移除，再檢查 CDN 與各語系的新回應。 [LiteSpeed WordPress 快取 API](https://docs.litespeedtech.com/lscache/lscwp/api/)
 
+### Nginx Cache（Beta）
+
+獨立 Nginx FastCGI 快取需要主機設定可驗證身分的 loopback listener。在「快取管理 → 整合 → Nginx Cache（Beta）」確認連線與伺服器排除行為後再啟用。Nginx 負責儲存 HTML，YS CACHE 先清除來源並確認結果，再清除 CDN。公開快取鍵和清除路由須一起設定。 [Nginx 主機設定](nginx-cache.md#繁體中文)
+
 ### OPcache
 
 OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 PHP 啟用擴充並允許呼叫 `opcache_reset()`。各自隔離的 PHP 集區需在其環境重設。 [PHP 手冊](https://www.php.net/manual/en/function.opcache-reset.php)
@@ -100,9 +116,17 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 | 靜態資源 | 無 | JS、CSS、圖片、字型與支援的媒體 |
 | HTML／JS／CSS | 支援 | JS、CSS |
 
-由來源到外層依序新增 CDN，並設定各層是否跟隨主設定的內容更新清除。Cloudflare 可用具備 Zone Read 與 Cache Purge 權限的 Token 查找資源 ID，Bunny CDN 使用帳戶 API Key，Gcore 使用客戶 API Token。查找會配對已存在的資源。僅填 CNAME 的層若也要透過 API 清除，請同時設定供應商與憑證。用各語系的訪客網址測兩次，確認換圖後的路徑與對應語系一致，且符合條件的資源使用 CNAME。若站點配置了 CSP 或跨網域政策，請確認 CDN 網域可載入相應資源。
+由來源到外層依序新增 CDN，並設定各層是否跟隨主設定的內容更新清除。「查詢資源 ID」會配對已存在的資源。選擇供應商及填入憑證後，可輸入傳遞網域查找已存在的資源，或填入已知的 ID 進行驗證。HTML 層的網域留白時，採用 WordPress 主網域。靜態資源層需填寫實際 CDN 傳遞網域，即使已知資源 ID 也需要。
 
-[Cloudflare](https://developers.cloudflare.com/api/resources/cache/methods/purge/) · [Bunny CDN](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) · [Gcore](https://docs.gcore.com/api-reference/cdn/tools/purge-cache)
+| 供應商 | 資源 ID | 憑證 |
+| --- | --- | --- |
+| Cloudflare | Zone ID | 使用限該 Zone 的 API Token。用網域查找需 Zone Read，清除需 Cache Purge。 [查詢 Zone](https://developers.cloudflare.com/api/resources/zones/methods/list/) · [清除快取](https://developers.cloudflare.com/api/resources/cache/methods/purge/) |
+| Bunny CDN | Pull Zone ID | 使用帳戶 API Key。網域須已綁定至 Pull Zone。 [查詢 Pull Zones](https://bunny.net/docs/api-reference/core/pull-zone/list-pull-zones) |
+| Gcore | CDN 資源 ID | 使用具備讀取與清除權限的 IAM／CDN 角色 API Token，可配對資源的主要或次要傳遞網域。 [查詢 CDN 資源](https://docs.gcore.com/api-reference/cdn/cdn-resources/get-cdn-resources-list) |
+
+查找確認憑證可讀取既有資源。要驗證清除權限，請啟用 API 清除並儲存，再測試指定資源的單頁清除。供應商受理後，各 CDN 節點仍需時間套用。
+
+若只需要改寫靜態資源，請選擇「CNAME」、填入已在供應商設定的 CDN 網域，選擇範圍並啟用網址改寫。請在供應商設定 DNS、TLS 和回源。純 CNAME 層只改寫 WordPress 資源網址，略過資源查找及 API 清除。要清除請選對應的支援供應商並連接資源。儲存後檢查各已發布語系的圖片、JS 和 CSS 網址及其回應，並確認 CSP 與跨網域政策允許該 CDN 網域。
 
 在「CDN 層 → 網站別名網域」填入提供相同公開路徑的別名，一行一個主機名稱。若別名有獨立的 CDN 資源，請在該別名經過的每一層設定可傳遞 HTML 的項目。設定後，用同一頁測試主要與別名網域的手動單頁清除。Bunny CDN 每批最多處理 20 個網址，同一路徑在每個主機名稱各算一個網址。
 

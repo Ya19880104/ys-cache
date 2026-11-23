@@ -3,7 +3,7 @@
  * Plugin Name: YS CACHE
  * Plugin URI: https://yangsheep.com.tw
  * Description: HTML page cache and layered cache purging for WordPress.
- * Version: 0.1.1-beta.8
+ * Version: 0.1.1-beta.9
  * Requires at least: 6.4
  * Requires PHP: 8.0
  * Author: YANGSHEEP DESIGN
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'YS_CACHE_VERSION', '0.1.1-beta.8' );
+define( 'YS_CACHE_VERSION', '0.1.1-beta.9' );
 define( 'YS_CACHE_FILE', __FILE__ );
 define( 'YS_CACHE_DIR', plugin_dir_path( __FILE__ ) );
 

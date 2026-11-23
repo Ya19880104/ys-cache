@@ -17,8 +17,8 @@ YS CACHE 是 WordPress 的訪客 HTML 快取外掛，支援單頁與全站清除
 - **表單頁。** WPForms、Fluent Forms 與 JetFormBuilder 維持繞過 HTML 快取。「公開 Contact Form 7 路徑（Beta）」可讓指定網址中符合條件的簡單訪客表單使用本機 YS CACHE HTML 快取，最長五分鐘。若要讓外層頁面保持可快取、表單維持即時渲染，可內嵌獨立排除的同源表單頁。 [表單設定及測試](docs/cache-integrations.md#表單和快取效期)
 - **CSS 與 JavaScript。** CSS 壓縮、JS 壓縮及延後執行 JS 可各自啟用，預設關閉。排除規則可填代號或路徑。要延後執行某支腳本，請明確填入它在 WordPress 的註冊代號，並測試會用到它的功能。
 - **自動清除。** WordPress Cron 在背景合併相近的變更，先清來源，再依 CDN 層排序清除。WooCommerce 庫存變更只清受影響的頁面。暫時失敗會逐步拉長重試間隔，最長 24 小時。CDN 層可跟隨主設定或僅手動清除。
-- **伺服器。** PHP 允許 WordPress 呼叫重設功能時，可自動偵測 OPcache。相容主機可啟用 LiteSpeed Cache（Beta）管理來源 HTML，並與 CDN 依序清除。YS CLOUD 位於「整合」的「CDN 層」後方。
-- **CDN。** 選擇傳遞範圍，並依來源到外層排列。填寫網站別名網域，讓清除涵蓋主要網域與別名。靜態資源可使用獨立 CNAME。儲存後在各已發布語系檢查圖片、JS 與 CSS 的網址及實際回應。供應商接受清除請求後，各 CDN 節點需要時間套用。
+- **伺服器。** PHP 允許 WordPress 呼叫重設功能時，可自動偵測 OPcache。相容主機可啟用 LiteSpeed 或獨立 Nginx Cache（Beta）管理來源 HTML，並在 CDN 前清除。在「整合」也可設定 YS CLOUD。 [獨立 Nginx 設定](docs/nginx-cache.md#繁體中文)
+- **CDN。** Cloudflare、Bunny CDN 和 Gcore 可用供應商憑證查找現有資源 ID。選擇傳遞範圍，由來源到外層排列，並填寫要清除的網站別名。純 CNAME 層會將符合條件的靜態資源改寫至既有 CDN 網域。DNS 與 API 清除由供應商設定。 [CDN 連線說明](docs/cache-integrations.md#cdn-和-cname)
 - **語系。** 後台依 WordPress 使用者語言顯示。使用 TranslatePress 的網站，請個別測試每個語系網址及其對應圖片。
 
 [整合操作說明](docs/cache-integrations.md#繁體中文) · [授權](LICENSE)

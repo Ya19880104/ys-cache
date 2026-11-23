@@ -52,6 +52,13 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     function __( $message, $domain = '' ) { return $message; }
 
     $path = parse_url( $_SERVER['REQUEST_URI'], PHP_URL_PATH );
+    final class FixtureNginx {
+        public static function configured(): bool { return $GLOBALS['path'] !== '/nginx-offline/'; }
+        public static function purge( array $urls ): array {
+            return [ 'layer' => 'Nginx', 'status' => 'ok', 'message' => implode( ',', $urls ), 'http' => 204 ];
+        }
+    }
+    class_alias( FixtureNginx::class, 'YangSheep\Cache\YSCacheNginx' );
     $wpdb = new class( $path ) {
         public string $prefix = 'wp_';
         private string $path;
@@ -65,12 +72,14 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
                 return $this->database()['generation'];
             }
             $native = str_starts_with( $this->path, '/native-' );
+            $nginx = str_starts_with( $this->path, '/nginx-' );
             $edge = str_starts_with( $this->path, '/edge' ) || $this->path === '/native-edge/';
             $local = $edge || str_starts_with( $this->path, '/local' ) || str_ends_with( $this->path, '-purge/' );
             return json_encode( [ 'enabled' => true, 'ttl' => 3, 'auto_purge' => $this->path !== '/auto-off-purge/', 'exclude_paths' => '/protected/',
                 'ttl_paths' => "/edge-short/* 9\n/edge-short 6\n/local-short 1\n/local-short 0", 'providers' => [
-                'enhance' => [ 'enabled' => ! $local && ! $native, 'delegate_html' => ! $local && ! $native, 'rules_verified' => $this->path !== '/unverified/' ],
+                'enhance' => [ 'enabled' => ! $local && ! $native && ! $nginx, 'delegate_html' => ! $local && ! $native && ! $nginx, 'rules_verified' => $this->path !== '/unverified/' ],
                 'litespeed' => [ 'enabled' => $native, 'rules_verified' => $this->path !== '/native-unverified/' ],
+                'nginx' => [ 'enabled' => $nginx, 'rules_verified' => $this->path !== '/nginx-unverified/' ],
                 'opcache' => [ 'enabled' => false ],
                 'alias_hosts' => [ 'store-alias.example.test' ],
                 'cdn' => $edge ? [[ 'provider' => 'cloudflare', 'enabled' => true, 'scope' => $this->path === '/edge-static/' ? 'static' : 'html',
@@ -106,6 +115,13 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     }
     if ( $_SERVER['REQUEST_METHOD'] === 'POST' && str_ends_with( $path, '-purge/' ) ) {
         header( 'Content-Type: application/json' );
+        if ( $path === '/nginx-page-purge/' ) {
+            $generations = YangSheep\Cache\Database\YSCacheSettingsRepo::pageGenerations( '/nginx-standard/' );
+            $results = $cache::purgePage( home_url() . '/nginx-standard/' );
+            $updated = YangSheep\Cache\Database\YSCacheSettingsRepo::pageGenerations( '/nginx-standard/' );
+            echo json_encode( [ $results, $generations[0] === $updated[0], $generations[1] !== $updated[1] ] );
+            return;
+        }
         if ( $path === '/stock-test-purge/' ) {
             class TRP_Translate_Press {
                 public static function get_trp_instance(): self { return new self(); }
@@ -172,7 +188,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
     if ( $path === '/native-stale-generation/' ) {
         YangSheep\Cache\Database\YSCacheSettingsRepo::invalidate();
     }
-    if ( $path === '/guest-token/' || $path === '/native-guest-token/' ) {
+    if ( in_array( $path, [ '/guest-token/', '/native-guest-token/', '/nginx-guest-token/' ], true ) ) {
         echo '<!doctype html><html><script>example = {"guestToken":"fixture"};</script></html>';
     } else {
         echo '<!doctype html><html><p>fixture</p></html>';
@@ -240,6 +256,14 @@ try {
     [ , $headers ] = request( $address, '/native-edge/' );
     check( $headers['x-litespeed-cache-control'] ?? '', 'public,max-age=300,esi=on', 'Native header remains public when HTML edge caching is approved' );
     check( str_contains( $headers['cache-control'] ?? '', 's-maxage=' ), true, 'Native shutdown metadata allows the verified edge to cache public HTML' );
+    [ , $headers ] = request( $address, '/nginx-standard/' );
+    check( $headers['x-ys-cache'] ?? '', 'DELEGATED', 'The verified Nginx owner receives eligible HTML' );
+    check( str_starts_with( $headers['x-accel-expires'] ?? '', '@' ), true, 'Nginx receives an absolute, nonce-aware cache expiry' );
+    foreach ( [ '/nginx-unverified/', '/nginx-offline/', '/nginx-guest-token/' ] as $path ) {
+        [ , $headers ] = request( $address, $path );
+        check( $headers['x-accel-expires'] ?? '', '0', 'Nginx keeps unverified or stateful HTML private for ' . $path );
+        check( str_contains( $headers['cache-control'] ?? '', 'no-store' ), true, 'An upstream cache cannot store the rejected Nginx response' );
+    }
     [ $body, $headers ] = request( $address, '/guest/' );
     check( $body, '<!doctype html><html><p>fixture</p></html>', 'Successful public guest render' );
     check( $headers['x-ys-cache'] ?? '', 'DELEGATED', 'Only safe guest HTML is delegated' );
@@ -328,6 +352,10 @@ try {
     }
     [ $alias ] = request( $address, '/alias-test-purge/', [], 'POST' );
     check( json_decode( $alias, true ), [ 'ok', 'error' ], 'Manual page clearing accepts only known aliases' );
+    [ $nginxReceipt ] = request( $address, '/nginx-page-purge/', [], 'POST' );
+    [ $results, $sameSite, $pageMoved ] = json_decode( $nginxReceipt, true );
+    check( array_column( $results, 'status' ), [ 'skipped', 'ok' ], 'A single-page purge can reach standard Nginx without local files' );
+    check( $sameSite && $pageMoved, true, 'Nginx invalidates only the selected page generation before purging' );
 } catch ( Throwable $error ) {
     fwrite( STDERR, $error->getMessage() . "\n" . (string) @file_get_contents( $log ) );
     $failure = true;

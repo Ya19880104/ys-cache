@@ -60,22 +60,35 @@
 }
 
 .ys-cache-admin .button:hover:not(:disabled) { border-color: var(--ys-cache-accent); background: var(--ys-cache-hover); color: var(--ys-cache-accent-dark); }
-.ys-cache-admin .ys-cache-purge-actions > .button {
+.ys-cache-admin .ys-cache-purge-actions .button {
+    inline-size: 100%;
     min-height: 36px;
     padding: 4px 12px;
     text-align: start;
     white-space: normal;
     font-weight: 600;
 }
+.ys-cache-purge-item .description {
+    margin: 4px 1px 3px;
+    color: #596a77;
+    line-height: 1.35;
+}
+.ys-cache-admin .button:disabled,
+.ys-cache-admin .button[disabled] {
+    border-color: #d4dde3;
+    background: #f1f4f6;
+    color: #596a77;
+    cursor: default;
+}
 
-.ys-cache-admin .ys-cache-purge-actions > .ys-cache-purge-main,
+.ys-cache-admin .ys-cache-purge-actions .ys-cache-purge-main:not(:disabled),
 .ys-cache-admin .ys-cache-form-footer .button-primary {
     border-color: var(--ys-cache-accent);
     background: var(--ys-cache-accent);
     color: #fff;
 }
 
-.ys-cache-admin .ys-cache-purge-actions > .ys-cache-purge-main:hover:not(:disabled),
+.ys-cache-admin .ys-cache-purge-actions .ys-cache-purge-main:hover:not(:disabled),
 .ys-cache-admin .ys-cache-form-footer .button-primary:hover:not(:disabled) {
     border-color: var(--ys-cache-accent-dark);
     background: var(--ys-cache-accent-dark);

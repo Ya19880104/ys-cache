@@ -222,6 +222,9 @@ namespace {
     $_SERVER['SERVER_SOFTWARE'] = 'Apache';
     $_SERVER['HTTP_X_LSCACHE'] = 'enabled';
     verify( ! YSCacheLiteSpeed::status()['available'], 'a proxy or client header is not native engine evidence' );
+    $_SERVER['SERVER_SOFTWARE'] = 'nginx/1.30.7';
+    $fixture['plugins'] = [];
+    verify( YSCacheLiteSpeed::status()['message'] === 'LiteSpeed Cache requires a LiteSpeed or OpenLiteSpeed server.', 'Nginx reports an unsupported server before suggesting plugin activation' );
 
     reset_fixture();
     foreach ( [ 'https://other.example.com/store/page/', 'https://shop.example.com/other-install/', 'https://shop.example.com/store/a%0ab/' ] as $url ) {

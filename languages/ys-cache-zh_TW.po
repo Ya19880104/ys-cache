@@ -948,3 +948,114 @@ msgstr "獨立載入表單"
 
 msgid "Place the form on a separate page on this site, add its path under Paths, then embed that page in an iframe on the public page. The form loads with its own scripts and visitor state."
 msgstr "將表單放在本站的獨立頁面，把該頁網址加到「路徑」，再用 iframe 嵌入公開頁面。表單會獨立載入所需的腳本與訪客狀態。"
+
+msgid "Verify the Nginx server bypass rules for stateful requests before enabling the integration."
+msgstr "請先確認 Nginx 在查找快取前會排除有狀態的請求，再啟用整合。"
+
+msgid "Enter the CDN delivery hostname for this asset layer."
+msgstr "請輸入此靜態資源層使用的 CDN 主機名稱。"
+
+msgid "Enter a valid CDN delivery hostname."
+msgstr "請輸入有效的 CDN 主機名稱。"
+
+msgid "Nginx cache integration is disabled."
+msgstr "Nginx 快取整合未啟用。"
+
+msgid "This PHP runtime must have OPcache enabled and allow WordPress to reset it."
+msgstr "目前的 PHP 環境必須啟用 OPcache 並允許 WordPress 重設。"
+
+msgid "A verified Nginx purge connection is required."
+msgstr "需要已驗證的 Nginx 快取清除連線。"
+
+msgid "Enable and save the Nginx integration before purging."
+msgstr "請先啟用並儲存 Nginx 整合，再清除快取。"
+
+msgid "Enable and save the LiteSpeed Cache integration before purging."
+msgstr "請先啟用並儲存 LiteSpeed Cache 整合，再清除快取。"
+
+msgid "Save the YS CLOUD connection with its control panel URL, domain ID, and API token."
+msgstr "請填寫控制台網址、網域 ID 及 API 權杖，再儲存 YS CLOUD 連線。"
+
+msgid "Enable and save the YS CLOUD integration before purging."
+msgstr "請先啟用並儲存 YS CLOUD 整合，再清除快取。"
+
+msgid "Save a CDN layer with API purging enabled, a resource ID, and a valid credential configuration."
+msgstr "請先填寫資源 ID 和有效的憑證資料，並啟用和儲存該 CDN 層的 API 清除設定。"
+
+msgid "Nginx Cache (Beta)"
+msgstr "Nginx 快取（Beta）"
+
+msgid "Look up an existing Cloudflare zone by its hostname, or enter the zone ID to verify it. Use a Cloudflare API token with access to that zone."
+msgstr "可用主機名稱查詢現有的 Cloudflare 網域區域，或輸入 Zone ID 驗證。請使用有權存取該區域的 Cloudflare API 權杖。"
+
+msgid "Look up an existing Bunny CDN Pull Zone by its hostname, or enter the Pull Zone ID to verify it. Use your Bunny account API key."
+msgstr "可用主機名稱查詢現有的 Bunny CDN Pull Zone，或輸入 Pull Zone ID 驗證。請使用 Bunny 帳戶 API 金鑰。"
+
+msgid "Look up an existing Gcore CDN resource by its hostname, or enter the resource ID to verify it. Use your Gcore API token."
+msgstr "可用主機名稱查詢現有的 Gcore CDN 資源，或輸入資源 ID 驗證。請使用 Gcore API 權杖。"
+
+msgid "CNAME mode rewrites eligible URLs to an existing CDN hostname that already works in DNS. Use a provider layer for API lookup and purging."
+msgstr "CNAME 模式將符合條件的網址改寫為 DNS 已可正常解析的 CDN 主機名稱。若要透過 API 查詢與清除，請選擇對應的 CDN 服務商。"
+
+msgid "Verify resource"
+msgstr "驗證資源"
+
+msgid "Enter a valid hostname or resource ID and an API credential to look up an existing resource. Asset-only layers also need a hostname."
+msgstr "輸入有效主機名稱或資源 ID 及 API 憑證可查詢既有資源。僅供靜態資源使用的 CDN 層也需填寫主機名稱。"
+
+msgid "An existing resource ID and API credential are needed to enable purging. Asset-only layers also need a hostname."
+msgstr "啟用清除需填寫既有資源 ID 與 API 憑證。僅供靜態資源使用的 CDN 層也需填寫主機名稱。"
+
+msgid "Purge Nginx cache"
+msgstr "清除 Nginx 快取"
+
+msgid "Nginx manages the HTML cache."
+msgstr "HTML 快取由 Nginx 管理。"
+
+msgid "This integration requires a host-configured Nginx cache purge connection. An Nginx server header only identifies the web server."
+msgstr "此整合需要由主機管理員設定 Nginx 快取清除連線。Nginx 回應標頭只代表網頁伺服器的類型。"
+
+msgid "Use Nginx Cache for HTML and origin purges"
+msgstr "使用 Nginx 管理 HTML 快取與來源站清除"
+
+msgid "Connect an existing CDN resource using its delivery hostname or its ID from the provider dashboard. Use an API credential that can read the resource and purge its cache. Resource lookup checks your connection to a resource and its hostname."
+msgstr "使用發送內容的主機名稱，或從服務商控制台取得資源 ID，以連接既有 CDN 資源。請使用可以讀取該資源及清除快取的 API 憑證。資源查詢會驗證憑證能否連接該資源，以及主機名稱是否相符。"
+
+msgid "Use a user API token scoped to the existing zone. Include Zone Read for hostname lookup and Cache Purge for clearing. Enter the zone hostname to look up its ID, or enter the Zone ID to verify it."
+msgstr "請使用限於該網域區域的使用者 API 權杖。以主機名稱查詢需有 Zone Read 權限，清除快取需有 Cache Purge 權限。輸入主機名稱以查詢 ID，或輸入 Zone ID 驗證。"
+
+msgid "Clear up to %d Nginx page URLs per request."
+msgstr "每次請求最多可清除 %d 個 Nginx 頁面網址。"
+
+msgid "Use a valid same-site page URL to clear Nginx Cache."
+msgstr "請使用有效的本站頁面網址清除 Nginx 快取。"
+
+msgid "The Nginx listener did not confirm cache clearing."
+msgstr "Nginx 本機端點未確認快取已清除。"
+
+msgid "Nginx confirmed cache clearing."
+msgstr "Nginx 已確認快取清除。"
+
+msgid "Configure the Nginx loopback port, secret and WordPress site hostname."
+msgstr "請設定 Nginx 本機連接埠、密鑰與 WordPress 網站主機名稱。"
+
+msgid "The Nginx loopback integration requires PHP cURL."
+msgstr "Nginx 本機端點整合需要 PHP cURL。"
+
+msgid "The Nginx loopback listener is configured for page and site clearing."
+msgstr "已確認 Nginx 本機端點設定，支援單頁和整站清除。"
+
+msgid "Unable to verify the Nginx loopback listener for this site."
+msgstr "無法驗證此站的 Nginx 本機端點。"
+
+msgid "LiteSpeed Cache requires a LiteSpeed or OpenLiteSpeed server."
+msgstr "LiteSpeed Cache 需在 LiteSpeed 或 OpenLiteSpeed 伺服器上執行。"
+
+msgid "Enable and save local HTML caching to clear it here."
+msgstr "請先啟用並儲存本機 HTML 快取，才能在這裡清除。"
+
+msgid "Enable and save at least one available cache layer for a whole-site purge."
+msgstr "請先啟用並儲存至少一個可用的快取層，才能清除全站快取。"
+
+msgid "Nginx cache setup for hosting administrators"
+msgstr "主機管理員的 Nginx 快取設定指南"

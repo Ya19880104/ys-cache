@@ -192,7 +192,7 @@ final class YSCacheEnhancePurge {
         self::schedule( $claimed['next_run'] );
         try {
             $results = $stock ? YSCache::purgeStockPages( array_keys( $batch ), $dispatchProviders ) :
-                ( $cdn === [] && ! isset( $dispatchProviders['litespeed'] )
+                ( $cdn === [] && ! isset( $dispatchProviders['litespeed'] ) && ! isset( $dispatchProviders['nginx'] )
                     ? YSCacheProviders::purge( $providers, 'enhance' ) : YSCacheProviders::purge( $dispatchProviders ) );
             $result = end( $results ) ?: [ 'status' => 'skipped' ];
         } catch ( \Throwable $error ) {
@@ -212,6 +212,9 @@ final class YSCacheEnhancePurge {
         $origins = [ 'enhance' => $providers['enhance'] ?? [], 'cdn' => $cdn ];
         if ( ! empty( $providers['litespeed']['enabled'] ) ) {
             $origins['litespeed'] = $providers['litespeed'];
+        }
+        if ( ! empty( $providers['nginx']['enabled'] ) ) {
+            $origins['nginx'] = $providers['nginx'];
         }
         if ( ! empty( $providers['alias_hosts'] ) ) {
             $origins['alias_hosts'] = $providers['alias_hosts'];
@@ -272,7 +275,8 @@ final class YSCacheEnhancePurge {
         $enhance = $providers['enhance'] ?? [];
         $enhance_enabled = ! empty( $enhance['enabled'] );
         $litespeed_enabled = ! empty( $providers['litespeed']['enabled'] );
-        if ( $cdn === [] && ! $enhance_enabled && ! $litespeed_enabled && ! ( $stock && $local ) ) {
+        $nginx_enabled = ! empty( $providers['nginx']['enabled'] );
+        if ( $cdn === [] && ! $enhance_enabled && ! $litespeed_enabled && ! $nginx_enabled && ! ( $stock && $local ) ) {
             return '';
         }
         $url = $enhance['url'] ?? '';
@@ -286,7 +290,7 @@ final class YSCacheEnhancePurge {
             $token = YS_CACHE_ENHANCE_TOKEN;
         }
         $aliases = array_values( (array) ( $providers['alias_hosts'] ?? [] ) );
-        if ( $cdn === [] && ! $litespeed_enabled && ! ( $stock && $local ) ) {
+        if ( $cdn === [] && ! $litespeed_enabled && ! $nginx_enabled && ! ( $stock && $local ) ) {
             if ( ! $url || ! $domain || ! $token ) {
                 return '';
             }
@@ -303,6 +307,9 @@ final class YSCacheEnhancePurge {
         ];
         if ( $litespeed_enabled ) {
             $identity['litespeed'] = true;
+        }
+        if ( $nginx_enabled ) {
+            $identity['nginx'] = YSCacheNginx::fingerprint();
         }
         if ( $aliases !== [] ) {
             $identity['aliases'] = $aliases;

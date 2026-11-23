@@ -89,8 +89,16 @@ final class YSCache {
     }
 
     public static function delegatesHtml( array $settings ): bool {
+        return self::delegatesToCloud( $settings ) || self::usesNginx( $settings );
+    }
+
+    public static function delegatesToCloud( array $settings ): bool {
         $enhance = $settings['providers']['enhance'] ?? [];
         return ! empty( $enhance['enabled'] ) && ! empty( $enhance['delegate_html'] );
+    }
+
+    public static function usesNginx( array $settings ): bool {
+        return ! empty( $settings['providers']['nginx']['enabled'] );
     }
 
     public static function usesLocalHtml( array $settings ): bool {
@@ -202,7 +210,7 @@ final class YSCache {
         }
 
         $results = [];
-        if ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::hasEdgeHtml( $settings ) ) {
+        if ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::usesNginx( $settings ) || self::hasEdgeHtml( $settings ) ) {
             foreach ( array_keys( $paths ) as $path ) {
                 if ( ! YSCacheSettingsRepo::invalidatePage( $path ) ) {
                     return [ self::pagePurgeResult( 'YS CACHE', 'error', __( 'The page cache generation could not be updated.', 'ys-cache' ) ) + [ 'retryable' => true ] ];
@@ -211,7 +219,7 @@ final class YSCache {
             $results[] = self::pagePurgeResult( 'YS CACHE', 'ok', __( 'Inventory page cache generations updated.', 'ys-cache' ) );
         }
         if ( ! empty( $providers['enhance']['enabled'] ) ) {
-            $state = self::delegatesHtml( $settings ) ? true : YSCacheEnhanceIntegration::status( $providers )['enabled'];
+            $state = self::delegatesToCloud( $settings ) ? true : YSCacheEnhanceIntegration::status( $providers )['enabled'];
             if ( $state === true ) {
                 $results[] = self::pagePurgeResult( 'YS CLOUD', 'skipped', __( 'YS CLOUD supports site-wide clearing only. Inventory changes use page-level clearing.', 'ys-cache' ) );
                 return $results;
@@ -252,9 +260,9 @@ final class YSCache {
         $settings = self::settings();
         if ( in_array( $_SERVER['REQUEST_METHOD'] ?? '', [ 'GET', 'HEAD' ], true ) && empty( $_SERVER['QUERY_STRING'] ) ) {
             // A render that began before a save can never repopulate the new generation.
-            if ( self::delegatesHtml( $settings ) ) {
+            if ( self::delegatesToCloud( $settings ) ) {
                 $this->requestGeneration = YSCacheSettingsRepo::generation();
-            } elseif ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::hasEdgeHtml( $settings ) ) {
+            } elseif ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::usesNginx( $settings ) || self::hasEdgeHtml( $settings ) ) {
                 $this->requestPageGenerations = YSCacheSettingsRepo::pageGenerations( (string) ( $_SERVER['REQUEST_URI'] ?? '/' ) );
             }
         }
@@ -282,12 +290,13 @@ final class YSCache {
         }
         $results = [];
         if ( $scope === 'all' && ! empty( $providers['opcache']['enabled'] ) ) {
-            $results = YSCacheProviders::purge( $providers, 'opcache' );
-            if ( ( $results[0]['status'] ?? '' ) !== 'ok' ) {
+            $results = YSCacheProviders::opcacheAvailable() ? YSCacheProviders::purge( $providers, 'opcache' ) :
+                [ self::pagePurgeResult( 'OPcache', 'skipped', __( 'OPcache reset is unavailable in this PHP runtime.', 'ys-cache' ) ) ];
+            if ( ( $results[0]['status'] ?? '' ) === 'error' ) {
                 return $results;
             }
         }
-        if ( in_array( $scope, [ 'local', 'all', 'enhance', 'litespeed', 'cdn' ], true ) ) {
+        if ( in_array( $scope, [ 'local', 'all', 'enhance', 'litespeed', 'nginx', 'cdn' ], true ) ) {
             $nativeOwner = self::usesLiteSpeed( $settings );
             $delegated = $nativeOwner || self::delegatesHtml( $settings );
             $ok = $delegated && $scope === 'local' ? true : YSCacheSettingsRepo::invalidate();
@@ -304,7 +313,7 @@ final class YSCache {
         }
         if ( $scope !== 'local' ) {
             $providers['opcache']['enabled'] = false;
-            $providerScope = $scope === 'cdn' && ( ! empty( $providers['enhance']['enabled'] ) || self::usesLiteSpeed( $settings ) ) ? 'all' : $scope;
+            $providerScope = $scope === 'cdn' && ( ! empty( $providers['enhance']['enabled'] ) || self::usesLiteSpeed( $settings ) || self::usesNginx( $settings ) ) ? 'all' : $scope;
             $results = array_merge( $results, YSCacheProviders::purge( $providers, $providerScope ) );
         }
         return $results;
@@ -319,7 +328,8 @@ final class YSCache {
         }
 
         $local = self::usesLocalHtml( $settings );
-        $cleared = ( ! $local && ! self::hasEdgeHtml( $settings ) && ! self::usesLiteSpeed( $settings ) ) || YSCacheSettingsRepo::invalidatePage( $target['path'] );
+        $cleared = ( ! $local && ! self::hasEdgeHtml( $settings ) && ! self::usesLiteSpeed( $settings ) && ! self::usesNginx( $settings ) ) ||
+            YSCacheSettingsRepo::invalidatePage( $target['path'] );
         $results = [ self::pagePurgeResult( 'YS CACHE', $cleared ? ( $local ? 'ok' : 'skipped' ) : 'error', $cleared
             ? ( $local ? __( 'This page’s HTML cache was cleared.', 'ys-cache' ) : __( 'The local HTML cache is disabled.', 'ys-cache' ) )
             : __( 'The page cache generation could not be updated.', 'ys-cache' ) ) ];
@@ -328,7 +338,7 @@ final class YSCache {
         }
 
         if ( ! empty( $providers['enhance']['enabled'] ) ) {
-            $state = self::delegatesHtml( $settings ) ? true : YSCacheEnhanceIntegration::status( $providers )['enabled'];
+            $state = self::delegatesToCloud( $settings ) ? true : YSCacheEnhanceIntegration::status( $providers )['enabled'];
             if ( $state !== false ) {
                 $results[] = self::pagePurgeResult( 'YS CLOUD', 'error', $state === true
                     ? __( 'YS CLOUD uses entire-site purges. Use Purge entire site.', 'ys-cache' )
@@ -613,7 +623,9 @@ final class YSCache {
         $local = self::usesLocalHtml( $settings );
         $externalLanguageSafe = ( $delegated || $this->edgeHtml || $this->liteSpeedHtml ) && YSCacheIntegrations::allowsExternalHtml();
         $sharedSafe = $this->externalHold && $externalLanguageSafe;
-        $fastcgi = $sharedSafe && $delegated && ! empty( $settings['providers']['enhance']['rules_verified'] );
+        $fastcgi = $sharedSafe && $delegated && ( self::usesNginx( $settings )
+            ? ! empty( $settings['providers']['nginx']['rules_verified'] ) && YSCacheNginx::configured()
+            : ! empty( $settings['providers']['enhance']['rules_verified'] ) );
         $this->edgeHtml = $sharedSafe && $this->edgeHtml && ( ! $delegated || $fastcgi );
         $this->liteSpeedCandidate = $this->liteSpeedHtml && $externalLanguageSafe && ! $delegated &&
             ! empty( $settings['providers']['litespeed']['rules_verified'] );

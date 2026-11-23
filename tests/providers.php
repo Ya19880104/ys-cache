@@ -82,6 +82,14 @@ final class FakeNativePurge {
 }
 class_alias(FakeNativePurge::class, 'YangSheep\Cache\YSCacheLiteSpeed');
 
+final class FakeNginxPurge {
+    public static function purge(array $urls): array {
+        $GLOBALS['http'][] = ['nginx-origin', $urls];
+        return ['layer' => 'Nginx', 'status' => $GLOBALS['nginx_status'] ?? 'ok'];
+    }
+}
+class_alias(FakeNginxPurge::class, 'YangSheep\Cache\YSCacheNginx');
+
 require dirname(__DIR__) . '/src/YSCacheProviders.php';
 use YangSheep\Cache\YSCacheProviders as Providers;
 
@@ -216,6 +224,24 @@ check($GLOBALS['http'][0][1], [$page], 'Native purge receives the original page 
 check(json_decode($GLOBALS['http'][2][1]['body'], true), ['files' => [$page]], 'Cloudflare receives the translated page URL');
 check(Providers::purge($liteSpeed, 'urls'), [], 'An empty URL list never widens to a full-site LiteSpeed purge');
 check(Providers::sanitize([], $liteSpeed)['litespeed']['enabled'], true, 'An omitted LiteSpeed control preserves its stored setting');
+
+$nginx = $settings;
+$nginx['enhance']['enabled'] = false;
+$nginx['nginx'] = ['enabled' => true, 'rules_verified' => true];
+check(Providers::sanitize([], $nginx)['nginx'], $nginx['nginx'], 'Existing Nginx capability is retained when omitted');
+check(Providers::targetBatchLimit($nginx), 5, 'Nginx serial page purges bound the background batch');
+$GLOBALS['http'] = [];
+check(array_column(Providers::purge($nginx), 'status'), ['ok', 'ok', 'ok', 'ok'], 'Full Nginx integration confirms origin and CDN clearing');
+check(array_column($GLOBALS['http'], 0), ['nginx-origin', $bunnyZone, $bunny_endpoint, $gcore_endpoint, $cloudflare_endpoint], 'Full Nginx clearing precedes every CDN request');
+check($GLOBALS['http'][0][1], [], 'Site clearing is explicit');
+$GLOBALS['http'] = [];
+check(array_column(Providers::purge($nginx, 'urls', [$page]), 'status'), ['ok', 'skipped', 'ok', 'ok'], 'Nginx clears a translated page before HTML CDN layers');
+check($GLOBALS['http'][0], ['nginx-origin', [$page]], 'Nginx receives the exact translated page only');
+$GLOBALS['http'] = [];
+$GLOBALS['nginx_status'] = 'error';
+check(array_column(Providers::purge($nginx, 'urls', [$page]), 'status'), ['error'], 'Unconfirmed Nginx clearing stops URL and CDN forwarding');
+check(array_column($GLOBALS['http'], 0), ['nginx-origin'], 'A failed Nginx stage leaves every edge untouched');
+unset($GLOBALS['nginx_status']);
 
 $auto = Providers::sanitize([
     'enhance' => ['enabled' => true, 'delegate_html' => true, 'rules_verified' => true],

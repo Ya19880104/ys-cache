@@ -16,6 +16,9 @@
     const panels = Array.from(admin.querySelectorAll('[data-tab-panel]'));
     const tabs = Array.from(admin.querySelectorAll('[role="tab"]'));
     const lastTab = new Map();
+    const savedCdnCredentials = new WeakMap();
+    const hostnamePattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+    const tokenPattern = /^[!-~]{1,2048}$/;
     const lifetime = form.elements.namedItem('ttl_value');
     const lifetimeUnit = form.elements.namedItem('ttl_unit');
     const lifetimeFactors = Object.fromEntries(Array.from(lifetimeUnit.options, (option) => [option.value, Number(option.dataset.seconds)]));
@@ -27,6 +30,57 @@
     const rowData = (row) => Object.fromEntries(
         Array.from(row.querySelectorAll('[data-key]:not(:disabled)'), (input) => [input.dataset.key, read(input)])
     );
+    const rowInput = (row, key) => row.querySelector(`[data-key="${key}"]`);
+    const credentialIdentity = ({ provider, zone_id = '', hostname = '', auth_email = '' }) => JSON.stringify([
+        provider, zone_id.trim().toLowerCase(), hostname.trim().toLowerCase(), provider === 'cloudflare' ? auth_email.trim() : '',
+    ]);
+    const setActionAvailable = (button, available) => {
+        button.dataset.unavailable = available ? '0' : '1';
+        button.disabled = !available || button.dataset.busy === '1';
+    };
+    const setPurgeAvailable = (scope, available) => {
+        admin.querySelectorAll(`[data-purge="${scope}"]`).forEach((button) => setActionAvailable(button, available));
+        admin.querySelectorAll(`[data-purge-reason="${scope}"]`).forEach((reason) => { reason.hidden = available; });
+    };
+    const refreshServerActions = () => {
+        const hasCloud = admin.dataset.hasEnhance === '1';
+        const cloudEnabled = admin.dataset.enhanceEnabled === '1';
+        const cloudPurgeReady = hasCloud && cloudEnabled;
+        const nginxPurgeReady = admin.dataset.nginxSupportsAll === '1' && admin.dataset.nginxEnabled === '1';
+        const liteSpeedPurgeReady = admin.dataset.litespeedAvailable === '1' && admin.dataset.litespeedEnabled === '1';
+        const localPurgeReady = admin.dataset.localEnabled === '1';
+        const cdnPurgeReady = admin.dataset.cdnPurgeReady === '1';
+        const opcacheReady = admin.dataset.opcacheAvailable === '1';
+        const enhanceToggle = form.elements.enhance_enabled;
+        const cloudDelegate = form.elements.enhance_delegate_html;
+        const enhanceDraftToken = form.elements.enhance_token.value.trim();
+        const hasDraftToken = enhanceDraftToken === '' ? hasCloud : tokenPattern.test(enhanceDraftToken);
+        const hasDraftCloud = !field('enhance_clear_token') && hasDraftToken
+            && /^https:\/\/[^/]+(?:\/api)?\/?$/i.test(field('enhance_url').trim())
+            && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(field('enhance_domain_id').trim());
+        const canEnableCloud = !field('enhance_clear_token') && (hasCloud || hasDraftCloud);
+        enhanceToggle.disabled = !enhanceToggle.checked && !canEnableCloud;
+        cloudDelegate.disabled = !cloudDelegate.checked && !(canEnableCloud && field('enhance_rules_verified'));
+        admin.querySelectorAll('[data-enhance]').forEach((button) => setActionAvailable(button, hasCloud));
+        admin.querySelector('[data-enhance-missing]').hidden = hasCloud;
+        admin.querySelector('[data-enhance-enable-to-purge]').hidden = !hasCloud || cloudEnabled;
+        setPurgeAvailable('enhance', cloudPurgeReady);
+        setPurgeAvailable('nginx', nginxPurgeReady);
+        setPurgeAvailable('litespeed', liteSpeedPurgeReady);
+        setPurgeAvailable('local', localPurgeReady);
+        setPurgeAvailable('cdn', cdnPurgeReady);
+        setPurgeAvailable('all', localPurgeReady || cloudPurgeReady || nginxPurgeReady || liteSpeedPurgeReady
+            || cdnPurgeReady || (opcacheReady && admin.dataset.opcacheEnabled === '1'));
+        const opcacheToggle = form.elements.opcache_enabled;
+        opcacheToggle.disabled = !opcacheToggle.checked && !opcacheReady;
+        for (const [scope, availability] of [['nginx', 'nginxSupportsAll'], ['litespeed', 'litespeedAvailable']]) {
+            const available = admin.dataset[availability] === '1';
+            const enabled = form.elements[`${scope}_enabled`];
+            const verified = form.elements[`${scope}_rules_verified`];
+            enabled.disabled = !enabled.checked && !(available && verified.checked);
+            verified.disabled = !available && !verified.checked;
+        }
+    };
     const enhanceConnection = () => ({
         enabled: field('enhance_enabled'),
         delegate_html: field('enhance_delegate_html'),
@@ -79,18 +133,19 @@
     const refreshCdnRows = () => {
         const rows = Array.from(list.querySelectorAll('[data-cdn-row]'));
         rows.forEach((row, index) => {
-            const type = row.querySelector('[data-key="provider"]').value;
+            const type = rowInput(row, 'provider').value;
             row.querySelectorAll('[data-api-only]').forEach((item) => {
                 item.hidden = type === 'cname';
                 item.querySelectorAll('input, select').forEach((input) => { input.disabled = item.hidden; });
             });
-            const scope = row.querySelector('[data-key="scope"]');
+            const scope = rowInput(row, 'scope');
             Array.from(scope.options).forEach((option) => {
                 option.disabled = type === 'cname' && !['code', 'static'].includes(option.value);
             });
             if (scope.selectedOptions[0]?.disabled) scope.value = 'static';
             row.querySelectorAll('[data-cloudflare-only]').forEach((item) => {
                 item.hidden = type !== 'cloudflare' || (item.hasAttribute('data-full-zone-only') && scope.value !== 'all');
+                item.querySelector('input').disabled = item.hidden;
             });
             row.querySelectorAll('[data-rewrite-option]').forEach((item) => {
                 item.hidden = scope.value === 'html';
@@ -99,6 +154,30 @@
             const htmlRules = row.querySelector('[data-html-only]');
             htmlRules.hidden = !['all', 'html', 'html_code'].includes(scope.value);
             htmlRules.querySelector('input').disabled = htmlRules.hidden;
+            const fields = rowData(row);
+            const hostname = fields.hostname.trim();
+            const id = (fields.zone_id || '').trim();
+            const token = (fields.token || '').trim();
+            const email = rowInput(row, 'auth_email');
+            const hostnameValid = hostname.length <= 253 && hostnamePattern.test(hostname);
+            const idValid = (type === 'cloudflare' ? /^[a-f0-9]{32}$/i : /^[1-9][0-9]{0,18}$/).test(id);
+            const savedCredential = savedCdnCredentials.get(row) === credentialIdentity(fields);
+            const hasCredential = !fields.clear_token && (token === '' ? savedCredential : tokenPattern.test(token))
+                && (email.disabled || email.validity.valid);
+            const hostRequired = ['code', 'static'].includes(scope.value);
+            const hostReady = hostnameValid || (!hostRequired && hostname === '');
+            const apiProvider = type !== 'cname';
+            const canLookup = apiProvider && hostReady && (id ? idValid : hostnameValid) && hasCredential;
+            const canEnable = apiProvider && hostReady && idValid && hasCredential;
+            const enable = rowInput(row, 'enabled');
+            const discover = row.querySelector('[data-cdn-discover]');
+            enable.disabled = !apiProvider || (!canEnable && !enable.checked);
+            rowInput(row, 'token').placeholder = savedCredential ? admin.dataset.credentialSaved : admin.dataset.credentialMissing;
+            discover.textContent = discover.dataset[id ? 'verify' : 'find'];
+            setActionAvailable(discover, canLookup);
+            row.querySelector('[data-cdn-lookup-note]').hidden = !apiProvider || canLookup;
+            row.querySelector('[data-cdn-enable-note]').hidden = !apiProvider || canEnable;
+            row.querySelectorAll('[data-cdn-provider-note]').forEach((note) => { note.hidden = note.dataset.cdnProviderNote !== type; });
             row.querySelector('[data-cdn-up]').disabled = index === 0;
             row.querySelector('[data-cdn-down]').disabled = index === rows.length - 1;
         });
@@ -135,6 +214,7 @@
     };
 
     const run = async (button, work, feedback = status) => {
+        button.dataset.busy = '1';
         button.disabled = true;
         feedback.textContent = '';
         feedback.classList.remove('ys-cache-error');
@@ -144,7 +224,8 @@
             feedback.textContent = error.message || admin.dataset.error;
             feedback.classList.add('ys-cache-error');
         } finally {
-            button.disabled = false;
+            button.dataset.busy = '0';
+            button.disabled = button.dataset.unavailable === '1';
         }
     };
 
@@ -201,6 +282,10 @@
                         enabled: field('litespeed_enabled'),
                         rules_verified: field('litespeed_rules_verified'),
                     },
+                    nginx: {
+                        enabled: field('nginx_enabled'),
+                        rules_verified: field('nginx_rules_verified'),
+                    },
                     alias_hosts: field('alias_hosts'),
                     cdn,
                 },
@@ -208,38 +293,61 @@
             const data = await request('ys_cache_save', { settings: JSON.stringify(settings) });
             status.textContent = data.message;
             const owner = admin.querySelector('[data-cache-owner]');
-            const ownership = data.delegated ? 'external' : settings.providers.litespeed.enabled ? 'litespeed' : settings.enabled ? 'local' : 'disabled';
+            const ownership = data.delegated ? 'external' : data.nginx_enabled ? 'nginx' : data.litespeed_enabled ? 'litespeed' : data.local_enabled ? 'local' : 'disabled';
             owner.textContent = owner.dataset[ownership];
+            admin.dataset.hasEnhance = data.has_enhance_connection ? '1' : '0';
+            admin.dataset.enhanceEnabled = data.enhance_enabled ? '1' : '0';
+            admin.dataset.nginxEnabled = data.nginx_enabled ? '1' : '0';
+            admin.dataset.litespeedEnabled = data.litespeed_enabled ? '1' : '0';
+            admin.dataset.localEnabled = data.local_enabled ? '1' : '0';
+            admin.dataset.opcacheEnabled = (data.opcache_enabled ?? settings.providers.opcache.enabled) ? '1' : '0';
             if (data.results?.length) showResults(data.results);
             const savedCdn = data.cdn || [];
+            admin.dataset.cdnPurgeReady = savedCdn.some((row) => row.purge_ready) ? '1' : '0';
             if (Array.isArray(data.alias_hosts)) form.elements.alias_hosts.value = data.alias_hosts.join('\n');
             list.querySelectorAll('[data-cdn-row]').forEach((row) => {
-                const fields = rowData(row);
-                const index = savedCdn.findIndex((saved) => saved.provider === fields.provider
-                    && saved.zone_id === (fields.zone_id || '').trim().toLowerCase()
-                    && saved.hostname === fields.hostname.trim().toLowerCase()
-                    && saved.auth_email === (fields.provider === 'cloudflare' ? fields.auth_email.trim() : ''));
+                const identity = credentialIdentity(rowData(row));
+                const index = savedCdn.findIndex((saved) => credentialIdentity(saved) === identity);
+                const saved = savedCdn[index];
                 row.dataset.savedIndex = index === -1 ? '' : index;
-                row.querySelector('[data-key="html_cache_verified"]').checked = Boolean(savedCdn[index]?.html_cache_verified);
-                if (index !== -1) row.querySelector('[data-key="auto_purge"]').value = savedCdn[index].auto_purge === 'off' ? 'off' : 'inherit';
+                savedCdnCredentials.delete(row);
+                if (saved?.has_credential) savedCdnCredentials.set(row, identity);
+                rowInput(row, 'html_cache_verified').checked = Boolean(saved?.html_cache_verified);
+                rowInput(row, 'enabled').checked = Boolean(saved?.enabled);
+                if (saved) rowInput(row, 'auto_purge').value = saved.auto_purge === 'off' ? 'off' : 'inherit';
+                rowInput(row, 'token').value = '';
+                rowInput(row, 'clear_token').checked = false;
             });
-            form.querySelectorAll('[type="password"]').forEach((input) => {
-                if (input.value) input.placeholder = admin.dataset.credentialSaved;
-                input.value = '';
-            });
-            form.querySelectorAll('[data-key="clear_token"], [name="enhance_clear_token"]').forEach((input) => {
-                if (input.checked) input.closest('fieldset, section').querySelector('input[type="password"]').placeholder = admin.dataset.credentialMissing;
-                input.checked = false;
-            });
+            form.elements.enhance_token.value = '';
+            form.elements.enhance_token.placeholder = data.has_enhance_connection ? admin.dataset.credentialSaved : admin.dataset.credentialMissing;
+            form.elements.enhance_clear_token.checked = false;
+            refreshServerActions();
+            refreshCdnRows();
         });
+    });
+
+    form.addEventListener('input', (event) => {
+        const input = event.target;
+        if (['hostname', 'zone_id', 'auth_email', 'token'].includes(input.dataset.key)) {
+            input.closest('[data-cdn-row]').querySelector('[data-cdn-status]').textContent = '';
+            refreshCdnRows();
+        }
+        if (['enhance_url', 'enhance_domain_id', 'enhance_org_id', 'enhance_token'].includes(input.name)) refreshServerActions();
     });
 
     form.addEventListener('change', (event) => {
         const input = event.target;
-        if (['provider', 'scope', 'hostname'].includes(input.dataset.key)) {
-            input.closest('[data-cdn-row]').querySelector('[data-key="html_cache_verified"]').checked = false;
-            refreshCdnRows();
+        if (input.dataset.key === 'provider') {
+            const row = input.closest('[data-cdn-row]');
+            for (const key of ['token', 'zone_id', 'auth_email']) rowInput(row, key).value = '';
+            rowInput(row, 'enabled').checked = false;
+            rowInput(row, 'clear_token').checked = false;
+            row.querySelector('[data-cdn-status]').textContent = '';
         }
+        if (['provider', 'scope', 'hostname'].includes(input.dataset.key)) {
+            rowInput(input.closest('[data-cdn-row]'), 'html_cache_verified').checked = false;
+        }
+        if (input.matches('[data-key]')) refreshCdnRows();
         if (input.name === 'enhance_delegate_html' && input.checked) form.elements.enhance_enabled.checked = true;
         if (input.name === 'enhance_enabled' && !input.checked) form.elements.enhance_delegate_html.checked = false;
         if (['enhance_url', 'enhance_domain_id', 'enhance_org_id'].includes(input.name)) {
@@ -247,6 +355,7 @@
             enhanceStatus.textContent = '';
             enhancePaths.replaceChildren();
         }
+        if (/^(enhance_|nginx_|litespeed_|opcache_)/.test(input.name)) refreshServerActions();
     });
 
     form.addEventListener('invalid', (event) => {
@@ -269,7 +378,7 @@
 
     admin.addEventListener('click', (event) => {
         const button = event.target.closest('button');
-        if (!button) return;
+        if (!button || button.disabled) return;
         if (button.dataset.tabSection) {
             const section = button.dataset.tabSection;
             const group = tabGroups.find((item) => item.dataset.tabGroup === section);
@@ -297,18 +406,23 @@
             (button.disabled ? row.querySelector('select') : button).focus();
         } else if (button.hasAttribute('data-cdn-discover')) {
             const row = button.closest('[data-cdn-row]');
+            const rowStatus = row.querySelector('[data-cdn-status]');
+            const submitted = JSON.stringify(rowData(row));
             run(button, async () => {
-                const rowStatus = row.querySelector('[data-cdn-status]');
-                rowStatus.textContent = '';
-                const data = await request('ys_cache_cdn_discover', {
-                    row: JSON.stringify(rowData(row)),
-                    index: row.dataset.savedIndex,
-                });
-                row.querySelector('[data-key="zone_id"]').value = data.resource.id;
+                let data;
+                try {
+                    data = await request('ys_cache_cdn_discover', { row: submitted, index: row.dataset.savedIndex });
+                } catch (error) {
+                    if (row.isConnected && submitted === JSON.stringify(rowData(row))) throw error;
+                    return;
+                }
+                if (!row.isConnected || submitted !== JSON.stringify(rowData(row))) return;
+                rowInput(row, 'zone_id').value = data.resource.id;
                 rowStatus.textContent = [data.message, data.resource.name].filter(Boolean).join(' — ');
-            });
+                refreshCdnRows();
+            }, rowStatus);
         } else if (button.dataset.enhance) {
-            run(button, () => checkEnhance(button.dataset.enhance));
+            run(button, () => checkEnhance(button.dataset.enhance), enhanceStatus);
         } else if (button.dataset.purge) {
             const panel = button.closest('[data-tab-panel]');
             const output = panel?.querySelector('[data-tab-purge-results]') || results;
@@ -323,9 +437,13 @@
     const activeTab = window.location.hash.replace(/^#ys-cache-panel-/, '');
     selectTab(activeTab === 'enhance' ? 'ys-cloud' : activeTab || 'html', false);
     validateLifetime();
+    list.querySelectorAll('[data-cdn-row][data-has-credential="1"]').forEach((row) => {
+        savedCdnCredentials.set(row, credentialIdentity(rowData(row)));
+    });
+    refreshServerActions();
     refreshCdnRows();
     if (admin.dataset.hasEnhance === '1') {
         const check = admin.querySelector('[data-enhance="status"]');
-        run(check, () => checkEnhance('status'));
+        run(check, () => checkEnhance('status'), enhanceStatus);
     }
 })();

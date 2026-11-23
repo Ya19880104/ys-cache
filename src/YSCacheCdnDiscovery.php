@@ -63,16 +63,16 @@ final class YSCacheCdnDiscovery
         $hostname = $layer['hostname'];
         $id = $layer['zone_id'];
         if ($hostname === '' && $layer['role'] === 'images') {
-            return self::error(__('Enter the image CDN delivery hostname.', 'ys-cache'));
-        }
-        if ($id !== '') {
-            return self::byId($provider, $id, $hostname, $headers);
+            return self::error(__('Enter the CDN delivery hostname for this asset layer.', 'ys-cache'));
         }
         if ($hostname === '' && $layer['role'] === 'site') {
             $hostname = self::hostname(wp_parse_url(home_url('/'), PHP_URL_HOST));
         }
         if ($hostname === '') {
-            return self::error(__('Enter the CDN delivery hostname or the resource ID.', 'ys-cache'));
+            return self::error(__('Enter a valid CDN delivery hostname.', 'ys-cache'));
+        }
+        if ($id !== '') {
+            return self::byId($provider, $id, $hostname, $headers);
         }
 
         return $provider === 'cloudflare'
@@ -89,7 +89,10 @@ final class YSCacheCdnDiscovery
 
         $item = $reply['body'];
         if ($provider === 'cloudflare') {
-            $item = ($item['success'] ?? false) === true ? ($item['result'] ?? null) : null;
+            if (($item['success'] ?? false) !== true || !empty($item['errors']) || !is_array($item['result'] ?? null)) {
+                return self::invalidReply($reply['http']);
+            }
+            $item = $item['result'];
         }
         $resource = self::matchResource($provider, $item, $hostname);
         if ($resource === null || $resource['id'] !== $id) {
@@ -108,7 +111,7 @@ final class YSCacheCdnDiscovery
                 return $reply;
             }
             $body = $reply['body'];
-            if (($body['success'] ?? false) !== true || !is_array($body['result'] ?? null)) {
+            if (($body['success'] ?? false) !== true || !empty($body['errors']) || !is_array($body['result'] ?? null)) {
                 return self::invalidReply($reply['http']);
             }
 

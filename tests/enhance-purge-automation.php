@@ -5,6 +5,10 @@ namespace YangSheep\Cache {
         return $GLOBALS['now'];
     }
 
+    final class YSCacheNginx {
+        public static function fingerprint(): string { return $GLOBALS['nginx_fingerprint'] ?? 'configured-host'; }
+    }
+
     final class YSCache {
         public static function settings( bool $fresh = false ): array {
             return [ 'providers' => $GLOBALS['provider_settings'], 'auto_purge' => $GLOBALS['master_auto_purge'], 'enabled' => $GLOBALS['local_cache'] ];
@@ -496,6 +500,24 @@ namespace {
     $provider_settings['cdn'][1]['zone_id'] = 'different-manual-zone';
     run_worker( pending( true )['next_run'] );
     verify( count( $stock_dispatched ) === 1 && ! pending( true ), 'a changed manual alias route invalidates an older job target' );
+
+    prepare_fixture( [ 'enabled' => false ] );
+    $provider_settings['nginx'] = [ 'enabled' => true, 'rules_verified' => true ];
+    $purge_scope = 'all';
+    $purge_settings = [ 'enhance' => $provider_settings['enhance'], 'cdn' => [], 'nginx' => $provider_settings['nginx'] ];
+    $nativeNginx = [ 'layer' => 'Nginx', 'status' => 'ok', 'http' => 204 ];
+    $responses = [ $nativeNginx, $nativeNginx ];
+    content_change( $provider_settings );
+    verify( ! empty( pending() ) && ! $dispatched, 'Nginx-only sites queue full clearing in the background' );
+    run_worker( pending()['next_run'] );
+    verify( count( $dispatched ) === 1 && ! pending(), 'Nginx-only full worker dispatch succeeds without CDN' );
+    stock_change( [ $stock_urls[0] ] );
+    run_worker( pending( true )['next_run'] );
+    verify( $stock_dispatched === [ [ [ $stock_urls[0] ], $purge_settings ] ], 'Nginx-only stock worker sends the exact URL scope' );
+    content_change( $provider_settings );
+    $nginx_fingerprint = 'reconfigured-host';
+    run_worker( pending()['next_run'] );
+    verify( count( $dispatched ) === 1 && ! pending(), 'A pending job cannot clear a different Nginx listener' );
 
     echo "Automatic origin and CDN purge checks passed.\n";
 }

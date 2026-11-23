@@ -73,7 +73,7 @@ final class YSCacheProviders
 
     public static function targetBatchLimit(array $settings): int
     {
-        $limit = 100;
+        $limit = empty($settings['nginx']['enabled']) ? 100 : 5;
         foreach ((array) ($settings['cdn'] ?? []) as $layer) {
             if (is_array($layer) && !empty($layer['enabled']) && ($layer['provider'] ?? '') === 'bunny') {
                 $fanout = max(1, count(self::htmlHostsForLayer($settings, $layer)));
@@ -101,6 +101,19 @@ final class YSCacheProviders
     public static function autoPurgePolicy(array $layer): string
     {
         return in_array($layer['auto_purge'] ?? 'inherit', ['off', false, 0, '0'], true) ? 'off' : 'inherit';
+    }
+
+    public static function cdnHasCredential(array $layer): bool
+    {
+        return self::cdnToken($layer) !== '';
+    }
+
+    public static function cdnPurgeReady(array $layer): bool
+    {
+        $provider = $layer['provider'] ?? '';
+        return !empty($layer['enabled']) && is_string($provider) && isset(self::PROVIDER_LABELS[$provider]) && $provider !== 'cname'
+            && self::zoneId($provider, $layer['zone_id'] ?? '') !== '' && self::cdnHasCredential($layer)
+            && (self::scopeSupportsHtml($layer) || self::hostname($layer['hostname'] ?? '') !== '');
     }
 
     public static function sanitize(array $input, array $previous = []): array
@@ -176,10 +189,12 @@ final class YSCacheProviders
         }
 
         $litespeed = (array) ($input['litespeed'] ?? $previous['litespeed'] ?? []);
+        $nginx = (array) ($input['nginx'] ?? $previous['nginx'] ?? []);
         return [
             'opcache' => ['enabled' => !empty($input['opcache']['enabled'])],
             'enhance' => $enhance,
             'litespeed' => ['enabled' => !empty($litespeed['enabled']), 'rules_verified' => !empty($litespeed['rules_verified'])],
+            'nginx' => ['enabled' => !empty($nginx['enabled']), 'rules_verified' => !empty($nginx['rules_verified'])],
             'alias_hosts' => $alias_hosts,
             'cdn' => $cdn,
         ];
@@ -197,7 +212,7 @@ final class YSCacheProviders
 
     public static function purge(array $settings, string $scope = 'all', array $urls = []): array
     {
-        if (!in_array($scope, ['all', 'urls', 'opcache', 'enhance', 'litespeed', 'cdn'], true) || ($scope === 'urls' && $urls === [])) {
+        if (!in_array($scope, ['all', 'urls', 'opcache', 'enhance', 'litespeed', 'nginx', 'cdn'], true) || ($scope === 'urls' && $urls === [])) {
             return [];
         }
 
@@ -221,6 +236,17 @@ final class YSCacheProviders
         }
         if ($scope === 'litespeed' && empty($results)) {
             $results[] = self::result('LiteSpeed Cache', 'skipped', __('LiteSpeed Cache integration is disabled.', 'ys-cache'));
+        }
+
+        if (in_array($scope, ['all', 'nginx', 'urls'], true) && !empty($settings['nginx']['enabled'])) {
+            $result = YSCacheNginx::purge($scope === 'urls' ? $urls : []);
+            $results[] = $result;
+            if ($result['status'] !== 'ok') {
+                return $results;
+            }
+        }
+        if ($scope === 'nginx' && empty($results)) {
+            $results[] = self::result('Nginx', 'skipped', __('Nginx cache integration is disabled.', 'ys-cache'));
         }
 
         if (($scope === 'all' || $scope === 'enhance') && !empty($settings['enhance']['enabled'])) {

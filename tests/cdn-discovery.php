@@ -44,6 +44,7 @@ require dirname(__DIR__) . '/src/YSCacheProviders.php';
 require dirname(__DIR__) . '/src/YSCacheCdnDiscovery.php';
 
 use YangSheep\Cache\YSCacheCdnDiscovery as Discovery;
+use YangSheep\Cache\YSCacheProviders as Providers;
 
 $cloudflare_id = '01d8db9c88bf45820000000000000000';
 $cloudflare_zone = ['id' => $cloudflare_id, 'name' => 'example.com', 'status' => 'active'];
@@ -64,6 +65,21 @@ foreach ($GLOBALS['requests'] as [, $args]) {
     check($args['sslverify'], true, 'Discovery validates TLS');
     check($args['headers']['Authorization'], 'Bearer test-cloudflare', 'CF Bearer token header');
 }
+
+$GLOBALS['requests'] = [];
+$manualSite = ['provider' => 'cloudflare', 'zone_id' => $cloudflare_id, 'token' => 'test-cloudflare'];
+$GLOBALS['responses'] = [reply(['success' => true, 'result' => $cloudflare_zone])];
+check(Discovery::discover($manualSite)['resource']['hostname'], 'shop.example.com', 'Manual ID defaults to the site hostname for HTML layers');
+check($GLOBALS['requests'][0][0], 'https://api.cloudflare.com/client/v4/zones/' . $cloudflare_id, 'Manual site ID uses the detail endpoint');
+$GLOBALS['responses'] = [reply(['success' => true, 'result' => array_replace($cloudflare_zone, ['name' => 'unrelated.example.net'])])];
+check(Discovery::discover($manualSite)['status'], 'error', 'A manual ID cannot validate an unrelated site zone with an empty hostname');
+$GLOBALS['responses'] = [reply(['success' => true, 'result' => $cloudflare_zone, 'errors' => [['code' => 1001]]])];
+check(Discovery::discover($manualSite)['status'], 'error', 'CF detail rejects a successful envelope containing API errors');
+$GLOBALS['responses'] = [reply(['success' => true, 'result' => [$cloudflare_zone], 'errors' => [['code' => 1001]]])];
+check(Discovery::discover(['provider' => 'cloudflare', 'hostname' => 'example.com', 'token' => 'test-cloudflare'])['status'], 'error', 'CF list rejects a successful envelope containing API errors');
+$GLOBALS['requests'] = [];
+check(Discovery::discover($manualSite + ['scope' => 'code'])['message'], 'Enter the CDN delivery hostname for this asset layer.', 'Asset ID lookup still requires its actual delivery hostname');
+check($GLOBALS['requests'], [], 'Missing asset hostname issues no provider request');
 
 $row = ['provider' => 'cloudflare', 'zone_id' => $cloudflare_id, 'hostname' => 'shop.example.com', 'auth_email' => 'test@example.com'];
 $saved = $row + ['token_constant' => 'WP_ROCKET_CF_API_KEY'];
@@ -118,6 +134,30 @@ $GLOBALS['responses'] = [reply(['message' => 'Unexpected error with test-gcore']
 $result = Discovery::discover($row);
 check($result['http'], 403, 'Gcore access error returned to admin');
 check(str_contains(json_encode($result), 'test-gcore'), false, 'Provider error bodies stay private');
+
+$GLOBALS['requests'] = [];
+$GLOBALS['responses'] = [reply($gcore_zone)];
+$result = Discovery::discover($row + ['zone_id' => '9223372036854775807']);
+check($result['status'], 'ok', 'Gcore validates the supplied resource ID and secondary hostname');
+check($GLOBALS['requests'][0][0], 'https://api.gcore.com/cdn/resources/9223372036854775807', 'Known ID uses a single resource detail lookup');
+
+$GLOBALS['requests'] = [];
+$cname = [
+    'provider' => 'cname',
+    'scope' => 'static',
+    'hostname' => 'assets.example.com',
+    'enabled' => true,
+    'zone_id' => '47',
+    'token' => 'unused-cname-key',
+    'rewrite_urls' => true,
+];
+check(Discovery::discover($cname)['status'], 'error', 'CNAME has no provider resource discovery');
+$cname_settings = Providers::sanitize(['cdn' => [$cname]]);
+check($cname_settings['cdn'][0]['enabled'], false, 'CNAME purge cannot be enabled');
+check($cname_settings['cdn'][0]['token'], '', 'CNAME does not store an API credential');
+check(Providers::hasUrlRewriting($cname_settings), true, 'CNAME asset rewriting remains available');
+check(Providers::purge($cname_settings, 'cdn')[0]['status'], 'skipped', 'CNAME-only setup skips API purge');
+check($GLOBALS['requests'], [], 'CNAME setup and purge do not contact a CDN API');
 check($GLOBALS['responses'], [], 'All expected requests consumed');
 
 echo "CDN discovery checks passed.\n";

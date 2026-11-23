@@ -10,6 +10,13 @@ final class YSCacheLiteSpeed {
     private const HEADER = 'X-LiteSpeed-Purge: public,';
 
     public static function status(): array {
+        // Only server-provided variables identify the web server.
+        $software = (string) ( $_SERVER['SERVER_SOFTWARE'] ?? '' );
+        $edition = (string) ( $_SERVER['LSWS_EDITION'] ?? '' );
+        if ( strcasecmp( $software, 'LiteSpeed' ) !== 0 && stripos( $software, 'OpenLiteSpeed' ) !== 0 &&
+            stripos( $edition, 'OpenLiteSpeed' ) !== 0 ) {
+            return [ 'available' => false, 'message' => __( 'LiteSpeed Cache requires a LiteSpeed or OpenLiteSpeed server.', 'ys-cache' ) ];
+        }
         if ( ! defined( 'LSCWP_V' ) || ! in_array( self::PLUGIN, (array) get_option( 'active_plugins', [] ), true ) ) {
             return [ 'available' => false, 'message' => __( 'Activate the LiteSpeed Cache plugin on this site.', 'ys-cache' ) ];
         }
@@ -31,12 +38,7 @@ final class YSCacheLiteSpeed {
             return [ 'available' => false, 'message' => __( 'LiteSpeed Cache 7.9.2 or newer with its native purge hooks is required.', 'ys-cache' ) ];
         }
 
-        // Do not use HTTP_X_LSCACHE or ADC markers supplied by an HTTP client.
-        $software = (string) ( $_SERVER['SERVER_SOFTWARE'] ?? '' );
-        $edition = (string) ( $_SERVER['LSWS_EDITION'] ?? '' );
-        $nativeServer = strcasecmp( $software, 'LiteSpeed' ) === 0 ||
-            stripos( $software, 'OpenLiteSpeed' ) === 0 || stripos( $edition, 'OpenLiteSpeed' ) === 0;
-        if ( ! $nativeServer || empty( $_SERVER['X-LSCACHE'] ) || ! defined( 'LITESPEED_ON' ) || ! LITESPEED_ON ||
+        if ( empty( $_SERVER['X-LSCACHE'] ) || ! defined( 'LITESPEED_ON' ) || ! LITESPEED_ON ||
             ( defined( 'LITESPEED_DISABLE_ALL' ) && LITESPEED_DISABLE_ALL ) ||
             ( defined( 'LSWCP_EMPTYCACHE' ) && LSWCP_EMPTYCACHE ) || defined( 'LITESPEED_CLI' ) ) {
             return [ 'available' => false, 'message' => __( 'The LiteSpeed server cache was not verified on this request.', 'ys-cache' ) ];
