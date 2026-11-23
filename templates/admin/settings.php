@@ -565,7 +565,8 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="import" id="ys-cache-panel-import" aria-labelledby="ys-cache-tab-import" hidden>
             <h2><?php esc_html_e( 'Automatic import', 'ys-cache' ); ?></h2>
-            <p><?php esc_html_e( 'Activate the optional YS CACHE Import plugin with compatible cache settings on the same site. It detects supported settings automatically and reports the outcome in the Tools menu.', 'ys-cache' ); ?></p>
+            <p><?php esc_html_e( 'When you activate YS CACHE, it checks the active cache plugin and imports supported settings before enabling HTML caching.', 'ys-cache' ); ?></p>
+            <p><a href="<?php echo esc_url( admin_url( 'tools.php?page=ys-cache-import' ) ); ?>"><?php esc_html_e( 'Import results', 'ys-cache' ); ?></a></p>
             <p><a href="https://yangsheep.com.tw/wordpress-plugins/ys-cache/"><?php esc_html_e( 'YS CACHE installation and downloads', 'ys-cache' ); ?></a></p>
         </section>
         <div class="ys-cache-form-footer"><button type="submit" class="button button-primary"><?php esc_html_e( 'Save settings', 'ys-cache' ); ?></button></div>

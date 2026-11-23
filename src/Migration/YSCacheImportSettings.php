@@ -1,6 +1,6 @@
 <?php
 
-namespace YangSheep\Cache\Import;
+namespace YangSheep\Cache\Migration;
 
 use YangSheep\Cache\YSCacheProviders;
 
@@ -47,10 +47,10 @@ final class YSCacheImportSettings
             $seconds = (float) $interval * $units[$unit];
             $current['ttl_seconds'] = self::lifetime($seconds);
             if ($seconds > self::MAX_LIFETIME_SECONDS) {
-                $warnings[] = __('The imported cache lifetime exceeded seven days. YS CACHE applied its seven-day limit.', 'ys-cache-rocket-import');
+                $warnings[] = __('The imported cache lifetime exceeded seven days. YS CACHE applied its seven-day limit.', 'ys-cache');
             }
         } else {
-            $warnings[] = __('The previous cache had no expiry. The existing YS CACHE lifetime was kept.', 'ys-cache-rocket-import');
+            $warnings[] = __('The previous cache had no expiry. The existing YS CACHE lifetime was kept.', 'ys-cache');
         }
 
         $providers = is_array($current['providers'] ?? null) ? $current['providers'] : [];
@@ -65,7 +65,7 @@ final class YSCacheImportSettings
         $current['providers'] = $providers;
 
         if (!empty($source['cache_query_strings']) || !empty($source['cache_logged_user'])) {
-            $warnings[] = __('YS CACHE applies its public-page rules to requests with query parameters and signed-in visitors.', 'ys-cache-rocket-import');
+            $warnings[] = __('YS CACHE applies its public-page rules to requests with query parameters and signed-in visitors.', 'ys-cache');
         }
 
         return ['settings' => $current, 'warnings' => $warnings, 'unsupported' => array_keys($unsupported)];
@@ -116,18 +116,18 @@ final class YSCacheImportSettings
         $token = $fromConfig ? '' : self::text($source['cloudflare_api_key'] ?? '');
 
         if (!preg_match('/^[0-9a-f]{32}$/D', $zone) || !$email || (!$fromConfig && $token === '')) {
-            $warnings[] = __('The source Cloudflare zone or credentials were incomplete. Configure the integration in YS CACHE to enable purging.', 'ys-cache-rocket-import');
+            $warnings[] = __('The source Cloudflare zone or credentials were incomplete. Configure the integration in YS CACHE to enable purging.', 'ys-cache');
             return;
         }
 
         foreach ($cdn as $row) {
             if (($row['provider'] ?? '') === 'cloudflare' && ($row['zone_id'] ?? '') === $zone) {
-                $warnings[] = __('This Cloudflare zone is already configured. The existing YS CACHE settings were kept.', 'ys-cache-rocket-import');
+                $warnings[] = __('This Cloudflare zone is already configured. The existing YS CACHE settings were kept.', 'ys-cache');
                 return;
             }
         }
         if (count($cdn) >= YSCacheProviders::MAX_CDN_LAYERS) {
-            $warnings[] = __('YS CACHE reached its CDN layer limit. The source Cloudflare zone was skipped.', 'ys-cache-rocket-import');
+            $warnings[] = __('YS CACHE reached its CDN layer limit. The source Cloudflare zone was skipped.', 'ys-cache');
             return;
         }
 
@@ -148,17 +148,17 @@ final class YSCacheImportSettings
     {
         foreach ($cdn as $row) {
             if (!empty($row['rewrite_images'])) {
-                $warnings[] = __('An image CDN is already configured in YS CACHE. Its settings were kept.', 'ys-cache-rocket-import');
+                $warnings[] = __('An image CDN is already configured in YS CACHE. Its settings were kept.', 'ys-cache');
                 return;
             }
         }
         if (count($cdn) >= YSCacheProviders::MAX_CDN_LAYERS) {
-            $warnings[] = __('YS CACHE reached its CDN layer limit. The source image CNAME was skipped.', 'ys-cache-rocket-import');
+            $warnings[] = __('YS CACHE reached its CDN layer limit. The source image CNAME was skipped.', 'ys-cache');
             return;
         }
 
         if (!empty($source['cdn_reject_files']) || !empty($source['cdn_reject_pages'])) {
-            $warnings[] = __('The source CDN had file or page exclusions. Review the rules before enabling the image CDN in YS CACHE.', 'ys-cache-rocket-import');
+            $warnings[] = __('The source CDN had file or page exclusions. Review the rules before enabling the image CDN in YS CACHE.', 'ys-cache');
             return;
         }
 
@@ -180,7 +180,7 @@ final class YSCacheImportSettings
             return;
         }
 
-        $warnings[] = __('No compatible image CNAME was found in the source CDN settings.', 'ys-cache-rocket-import');
+        $warnings[] = __('No compatible image CNAME was found in the source CDN settings.', 'ys-cache');
     }
 
     private static function text($value): string

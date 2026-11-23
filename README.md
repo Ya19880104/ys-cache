@@ -7,8 +7,8 @@ YS CACHE is a WordPress plugin for guest HTML caching, targeted cache clearing, 
 ## Install and set up
 
 1. Download the YS CACHE ZIP from YANGSHEEP CLOUD. In WordPress, open **Plugins → Add New Plugin → Upload Plugin**, select the ZIP, and activate it.
-2. Open **Cache Management**, directly below **Dashboard**. Turn on guest HTML caching and save. New installations default to 28,800 seconds. Choose seconds, minutes, hours, or days to display and edit the same lifetime.
-3. To bring settings from a supported cache plugin, use the optional automatic import ZIP on the same download page. Install the current YS CACHE version first and read the import result in **Tools → YS CACHE Auto Import**.
+2. Activation detects a supported active cache plugin and imports compatible settings before YS CACHE turns on HTML caching. Check **Tools → YS CACHE Auto Import** for the result or to retry. Existing users can update YS CACHE in place. If the old import add-on is active, an administrator's next visit retires it after any pending recovery finishes.
+3. For a new cache configuration, open **Cache Management**, directly below **Dashboard**. Turn on guest HTML caching and save. The default lifetime is 28,800 seconds. Choose seconds, minutes, hours, or days to display and edit the same lifetime.
 4. On a public page, use **Purge cache** in the WordPress toolbar to clear that page or the entire site. On an admin screen without a current page, enter the public page URL for a targeted purge.
 
 ## Set up and verify integrations

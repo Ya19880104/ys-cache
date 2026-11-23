@@ -2,8 +2,8 @@
 /**
  * Plugin Name: YS CACHE
  * Plugin URI: https://yangsheep.com.tw
- * Description: HTML page cache and layered cache purging for WordPress.
- * Version: 0.1.1-beta.9
+ * Description: HTML page cache, layered cache purging, and automatic settings import for WordPress.
+ * Version: 0.1.1-beta.10
  * Requires at least: 6.4
  * Requires PHP: 8.0
  * Author: YANGSHEEP DESIGN
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'YS_CACHE_VERSION', '0.1.1-beta.9' );
+define( 'YS_CACHE_VERSION', '0.1.1-beta.10' );
 define( 'YS_CACHE_FILE', __FILE__ );
 define( 'YS_CACHE_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -46,9 +46,19 @@ register_deactivation_hook( __FILE__, static function (): void {
     \YangSheep\Cache\YSCacheEnhancePurge::cancel();
 } );
 
-add_action( 'init', static function (): void {
+\YangSheep\Cache\Migration\YSCacheImport::register( __FILE__ );
+if ( is_admin() ) {
+    \YangSheep\Cache\Admin\YSCacheImportAdmin::register( __FILE__ );
+}
+
+$ysCacheTranslations = static function (): void {
     load_plugin_textdomain( 'ys-cache', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
-} );
+};
+if ( did_action( 'init' ) ) {
+    $ysCacheTranslations();
+} else {
+    add_action( 'init', $ysCacheTranslations );
+}
 
 add_action( 'plugins_loaded', static function (): void {
     if ( class_exists( '\YangSheep\PluginHubClient\YSPluginHubClient' ) ) {

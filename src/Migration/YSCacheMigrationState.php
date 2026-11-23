@@ -1,6 +1,6 @@
 <?php
 
-namespace YangSheep\Cache\Import;
+namespace YangSheep\Cache\Migration;
 
 defined('ABSPATH') || exit;
 

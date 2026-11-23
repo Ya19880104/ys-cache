@@ -3,7 +3,7 @@
 namespace YangSheep\Cache {
     final class YSCache
     {
-        public static function settings(): array
+        public static function settings(bool $fresh = false): array
         {
             return $GLOBALS['cache_settings'];
         }
@@ -25,9 +25,9 @@ namespace YangSheep\Cache {
 }
 
 namespace {
-    use YangSheep\Cache\Import\YSCacheImport;
-    use YangSheep\Cache\Import\YSCacheMigrationState;
-    use YangSheep\Cache\Import\YSCacheImportSettings;
+    use YangSheep\Cache\Migration\YSCacheImport;
+    use YangSheep\Cache\Migration\YSCacheMigrationState;
+    use YangSheep\Cache\Migration\YSCacheImportSettings;
 
     if (PHP_SAPI !== 'cli') {
         exit;
@@ -194,9 +194,9 @@ namespace {
         }
     };
     require dirname(__DIR__) . '/src/YSCacheProviders.php';
-    require dirname(__DIR__) . '/tools/ys-cache-import/src/YSCacheImportSettings.php';
-    require dirname(__DIR__) . '/tools/ys-cache-import/src/YSCacheMigrationState.php';
-    require dirname(__DIR__) . '/tools/ys-cache-import/src/YSCacheImport.php';
+    require dirname(__DIR__) . '/src/Migration/YSCacheImportSettings.php';
+    require dirname(__DIR__) . '/src/Migration/YSCacheMigrationState.php';
+    require dirname(__DIR__) . '/src/Migration/YSCacheImport.php';
 
     $rocketSettings = [
         'cache_reject_uri' => ['/saved/(.*)', '/%E7%B6%B2%E9%A0%81/', 'https://sample.test/catalog/'],
@@ -237,15 +237,15 @@ namespace {
     }
 
     $actions = [];
-    YSCacheImport::register(WP_PLUGIN_DIR . '/' . COMPANION_FILE);
+    YSCacheImport::register(WP_PLUGIN_DIR . '/' . CORE_FILE);
 
-    fixture();
+    fixture(false);
     activate_plugin('unrelated/example.php');
     verify($events === ['activate:unrelated/example.php'] && is_plugin_active(SOURCE_PLUGIN_FILE), 'unrelated activation leaves the source plugin active');
     $events = [];
-    activate_plugin(COMPANION_FILE);
-    verify($events === ['activate:' . COMPANION_FILE, 'schedule-recovery', 'deactivate:' . SOURCE_PLUGIN_FILE, 'enable-cache'], 'companion activation triggers cutover after registration');
-    verify(is_plugin_active(COMPANION_FILE) && !is_plugin_active(SOURCE_PLUGIN_FILE) && $cache_settings['enabled'], 'correct active set on successful cutover');
+    activate_plugin(CORE_FILE);
+    verify($events === ['activate:' . CORE_FILE, 'schedule-recovery', 'deactivate:' . SOURCE_PLUGIN_FILE, 'enable-cache'], 'main activation triggers cutover after registration');
+    verify(is_plugin_active(CORE_FILE) && !is_plugin_active(SOURCE_PLUGIN_FILE) && $cache_settings['enabled'], 'correct active set on successful cutover');
     verify($config_preserved && !$filters && !$cron && !YSCacheImport::pending(), 'configuration flag and recovery record after success');
     $result = YSCacheImport::lastResult();
     verify($result['state'] === 'success' && $cache_settings['ttl_seconds'] === 172800 && !isset($cache_settings['ttl']) && !$result['warnings'], 'persisted result and second-based lifetime');
@@ -259,23 +259,30 @@ namespace {
 
     fixture(false);
     $cache_settings['exclude_paths'] = '/existing/';
-    activate_plugin(COMPANION_FILE);
-    verify($events === ['activate:' . COMPANION_FILE, 'schedule-recovery', 'deactivate:' . SOURCE_PLUGIN_FILE, 'activate:' . CORE_FILE, 'enable-cache'], 'inactive core activates only after source plugin deactivation');
-    verify(str_starts_with($cache_settings['exclude_paths'], "/existing/\n"), 'stored settings merge after automatic core activation');
+    $active[] = COMPANION_FILE;
+    activate_plugin(CORE_FILE);
+    verify($events === ['activate:' . CORE_FILE, 'deactivate:' . COMPANION_FILE, 'schedule-recovery', 'deactivate:' . SOURCE_PLUGIN_FILE, 'enable-cache'], 'activation retires the obsolete add-on and switches once');
+    verify(str_starts_with($cache_settings['exclude_paths'], "/existing/\n"), 'stored settings merge after main activation');
 
-    fixture();
-    activate_plugin(COMPANION_FILE, '', false, true);
-    verify($events === ['activate:' . COMPANION_FILE] && is_plugin_active(SOURCE_PLUGIN_FILE), 'silent activation does not migrate');
+    fixture(false);
+    activate_plugin(CORE_FILE, '', false, true);
+    $active[] = COMPANION_FILE;
+    do_action('admin_init');
+    verify($events === ['activate:' . CORE_FILE, 'deactivate:' . COMPANION_FILE] && is_plugin_active(SOURCE_PLUGIN_FILE), 'silent update retires the add-on and keeps cache configuration untouched');
 
     fixture();
     $installed = $active = [];
-    activate_plugin(COMPANION_FILE);
-    verify($events === ['activate:' . COMPANION_FILE] && (YSCacheImport::lastResult()['state'] ?? '') === 'idle', 'no supported source plugin is an idle activation');
+    activate_plugin(CORE_FILE);
+    verify($events === ['activate:' . CORE_FILE] && !YSCacheImport::lastResult(), 'no supported source plugin is an idle activation');
 
-    fixture();
-    unlink(WP_PLUGIN_DIR . '/' . CORE_FILE);
+    fixture(false);
     $result = YSCacheImport::migrate();
-    verify(is_wp_error($result) && $result->code === 'core' && !$events && is_plugin_active(SOURCE_PLUGIN_FILE), 'missing core stops before deactivation');
+    verify(is_wp_error($result) && $result->code === 'core' && !$events && is_plugin_active(SOURCE_PLUGIN_FILE), 'inactive core stops before deactivation');
+
+    fixture(false);
+    $active = [];
+    activate_plugin(CORE_FILE);
+    verify($events === ['activate:' . CORE_FILE] && !$cache_settings['enabled'], 'an inactive source is not automatically imported');
 
     fixture();
     file_put_contents(ABSPATH . 'advanced-cache.php', '<?php // managed by a different plugin');
@@ -299,7 +306,7 @@ namespace {
 
     fixture(false);
     $can_enable = false;
-    activate_plugin(COMPANION_FILE);
+    activate_plugin(CORE_FILE);
     verify(YSCacheImport::pending() && wp_next_scheduled(RECOVERY_EVENT) && !is_plugin_active(SOURCE_PLUGIN_FILE) && is_plugin_active(CORE_FILE), 'failed enable schedules recovery of the original active plugin set');
     $authorized = false;
     do_action(RECOVERY_EVENT);
@@ -308,16 +315,16 @@ namespace {
     do_action('admin_init');
     verify(!is_plugin_active(SOURCE_PLUGIN_FILE), 'unauthorized admin request cannot recover');
     do_action(RECOVERY_EVENT);
-    verify(!is_plugin_active(CORE_FILE) && is_plugin_active(SOURCE_PLUGIN_FILE) && is_plugin_active(COMPANION_FILE), 'cron recovery works without a logged-in user');
+    verify(is_plugin_active(CORE_FILE) && is_plugin_active(SOURCE_PLUGIN_FILE) && !$cache_settings['enabled'], 'cron restores the source without needing a logged-in user or stopping the main plugin');
     verify(!YSCacheImport::pending() && !$cron && YSCacheImport::lastResult()['state'] === 'restored', 'successful cron recovery clears record and schedule');
     $events = [];
     do_action(RECOVERY_EVENT);
     verify(!$events, 'repeated recovery cannot mutate after clearing the record');
 
-    fixture(false);
-    $can_activate_core = false;
+    fixture();
+    $can_enable = false;
     $result = YSCacheImport::migrate();
-    verify(is_wp_error($result) && $result->code === 'restore' && YSCacheImport::pending(), 'core activation failure leaves a recovery record');
+    verify(is_wp_error($result) && $result->code === 'restore' && YSCacheImport::pending(), 'a failed switch leaves a recovery record');
     fresh_request();
     file_put_contents(ABSPATH . 'advanced-cache.php', '<?php // another owner appeared before recovery');
     do_action(RECOVERY_EVENT);

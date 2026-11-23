@@ -1,10 +1,9 @@
 <#
 .SYNOPSIS
-Build both installable WordPress ZIP files for YS CACHE.
+Build the installable WordPress ZIP file for YS CACHE.
 
 .DESCRIPTION
-The build copies only the runtime files listed below. It creates ys-cache.zip
-and ys-cache-import.zip in dist by default.
+The build copies only the runtime files listed below to dist/ys-cache.zip by default.
 
 .EXAMPLE
 pwsh -NoProfile -File .\scripts\build.ps1
@@ -22,7 +21,6 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$importerRoot = Join-Path $projectRoot 'tools/ys-cache-import'
 
 $mainFiles = @(
     'LICENSE',
@@ -34,10 +32,15 @@ $mainFiles = @(
     'assets/css/ys-cache-admin.css',
     'assets/js/ys-cache-admin.js',
     'assets/js/ys-cache-admin-bar.js',
+    'assets/js/ys-cache-import.js',
     'languages/ys-cache-zh_TW.mo',
     'src/Admin/YSCacheAdmin.php',
     'src/Admin/YSCacheAdminBar.php',
+    'src/Admin/YSCacheImportAdmin.php',
     'src/Database/YSCacheSettingsRepo.php',
+    'src/Migration/YSCacheImport.php',
+    'src/Migration/YSCacheImportSettings.php',
+    'src/Migration/YSCacheMigrationState.php',
     'src/YSCache.php',
     'src/YSCacheAssetOptimization.php',
     'src/YSCacheCdnDiscovery.php',
@@ -96,17 +99,6 @@ if ($optimizerFiles -notcontains 'LICENSE' -or $optimizerFiles -notcontains 'REA
     throw 'The optimizer dependency contains unexpected files or is missing required source.'
 }
 $mainFiles += $optimizerFiles | ForEach-Object { "$optimizerPrefix/$_" }
-$importerFiles = @(
-    'README.md',
-    'ys-cache-import.php',
-    'assets/ys-cache-import.js',
-    'languages/ys-cache-rocket-import-zh_TW.mo',
-    'src/YSCacheImport.php',
-    'src/YSCacheImportAdmin.php',
-    'src/YSCacheMigrationState.php',
-    'src/YSCacheImportSettings.php'
-)
-
 function Get-ArchiveEntries {
     param([string] $Slug, [string] $SourceRoot, [string[]] $RelativePaths)
 
@@ -159,15 +151,8 @@ function Write-PluginArchive {
 }
 
 $mainEntries = @(Get-ArchiveEntries -Slug 'ys-cache' -SourceRoot $projectRoot -RelativePaths $mainFiles)
-# Retain the installed plugin basename so this archive upgrades existing installations.
-$importerSlug = 'ys-cache-rocket-import'
-$importerEntries = @(Get-ArchiveEntries -Slug $importerSlug -SourceRoot $importerRoot -RelativePaths $importerFiles)
-($importerEntries | Where-Object Entry -eq "$importerSlug/ys-cache-import.php").Entry = "$importerSlug/$importerSlug.php"
-$importerEntries += @(Get-ArchiveEntries -Slug $importerSlug -SourceRoot $projectRoot -RelativePaths @('LICENSE'))
 $buildDirectory = New-Item -Path $OutputDirectory -ItemType Directory -Force
 $mainZip = Join-Path $buildDirectory.FullName 'ys-cache.zip'
-$importerZip = Join-Path $buildDirectory.FullName 'ys-cache-import.zip'
 
 Write-PluginArchive -Destination $mainZip -Entries $mainEntries
-Write-PluginArchive -Destination $importerZip -Entries $importerEntries
-Get-Item -LiteralPath $mainZip, $importerZip | Select-Object Name, Length, FullName
+Get-Item -LiteralPath $mainZip | Select-Object Name, Length, FullName
