@@ -59,7 +59,7 @@ final class YSCacheIntegrations {
 			&& class_exists( '\YangSheep\TPAddons\Support\YSTPAddonsModules' );
 	}
 
-	public static function bypass( bool $localContactForm = false ): bool {
+	public static function bypass( bool $localContactForm = false, bool $fragments = false ): bool {
 		// YS CART localizes this header's value into storefront scripts during an HTML render.
 		if ( ! empty( $_SERVER['HTTP_X_YS_GUEST_TOKEN'] )
 			|| ! empty( $_SERVER['HTTP_X_WP_NONCE'] ) || ! empty( $_SERVER['HTTP_CART_TOKEN'] ) ) {
@@ -83,7 +83,7 @@ final class YSCacheIntegrations {
 		}
 
 		$post = get_queried_object();
-		if ( $post instanceof \WP_Post && self::formContentRequiresBypass( $post->post_content, $localContactForm ) ) {
+		if ( $post instanceof \WP_Post && self::formContentRequiresBypass( $post->post_content, $localContactForm, $fragments ) ) {
 			return true;
 		}
 
@@ -146,20 +146,32 @@ final class YSCacheIntegrations {
 	}
 
 	/** Check a post's own content without running shortcodes or fetching associated records. */
-	public static function formContentRequiresBypass( string $content, bool $localContactForm = false ): bool {
+	public static function formContentRequiresBypass( string $content, bool $localContactForm = false, bool $fragments = false ): bool {
 		if ( ! str_contains( $content, '[' ) && ! str_contains( $content, '<!--' ) ) {
 			return false;
 		}
 
+		$seen = false;
 		foreach ( self::FORM_PLUGINS as $slug => $plugin ) {
-			if ( ! defined( $plugin['version'] ) || ( $localContactForm && $slug === 'contact-form-7' ) ) {
+			if ( ! defined( $plugin['version'] ) ) {
 				continue;
 			}
 
 			$pattern = '~(?<!\[)\[(?:' . $plugin['shortcodes'] . ')(?=[\s/\]])'
 				. '|<!--\s+wp:(?:' . $plugin['blocks'] . ')(?=[\s/])~';
 			if ( preg_match( $pattern, $content ) === 1 ) {
-				return true;
+				if ( ! $localContactForm || $seen ) {
+					return true;
+				}
+				$seen = true;
+				if ( $slug === 'contact-form-7' ) {
+					if ( ! self::supportsPublicContactForms() ) {
+						return true;
+					}
+				} elseif ( ! $fragments || ! YSCachePublicForms::available( $slug === 'jetformbuilder' ? 'jet_fb_form' : $slug ) ||
+					( $slug === 'fluentform' && preg_match( '~(?<!\[)\[fluentform_(?:payments|payment_view)(?=[\s/\]])~', $content ) ) ) {
+					return true;
+				}
 			}
 		}
 

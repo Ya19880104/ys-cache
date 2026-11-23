@@ -937,14 +937,17 @@ msgstr "依路徑縮短 HTML 快取時效"
 msgid "Enter a path and seconds per line. The shortest matching lifetime applies to eligible HTML."
 msgstr "每行填入路徑與秒數。符合快取條件的 HTML 會使用命中規則中的最短時效。"
 
-msgid "Public Contact Form 7 paths (Beta)"
-msgstr "公開 Contact Form 7 路徑（Beta）"
+msgid "Public form paths (Beta)"
+msgstr "公開表單路徑（Beta）"
 
-msgid "Enter one path per line. Eligible public Contact Form 7 forms use local YS CACHE HTML for up to 300 seconds."
-msgstr "每行填一個路徑。符合條件的公開 Contact Form 7 可使用 YS CACHE 本機 HTML 快取，最長 300 秒。"
+msgid "Also render supported WPForms Lite, Fluent Forms and JetFormBuilder forms per visitor on these paths"
+msgstr "在這些路徑為每位訪客重新產生支援的 WPForms Lite、Fluent Forms 與 JetFormBuilder 表單"
 
-msgid "Forms with visitor-specific data, payments, CAPTCHA, or unsupported fields bypass the cache. WPForms, Fluent Forms and JetFormBuilder remain excluded."
-msgstr "含訪客專屬資料、付款、CAPTCHA 或不支援欄位的表單會繞過快取。WPForms、Fluent Forms 與 JetFormBuilder 仍套用排除。"
+msgid "Enter one public path per line, including each translation. Eligible pages use local HTML for up to five minutes."
+msgstr "每行填一個公開頁面路徑，各語系分開填寫。符合條件的頁面可使用本機 HTML 快取，最長五分鐘。"
+
+msgid "For a supported simple form, WPForms Lite, Fluent Forms, and JetFormBuilder render fresh fields for every visitor. Contact Form 7 can reuse eligible public markup. Keep private, prefilled, payment, and CAPTCHA forms excluded."
+msgstr "符合條件時，WPForms Lite、Fluent Forms 與 JetFormBuilder 會為每位訪客重新產生表單欄位。Contact Form 7 可重用公開表單內容。私人、預填、付款及 CAPTCHA 表單請維持排除。"
 
 msgid "Check a front-end cache hit"
 msgstr "檢查前台快取命中"

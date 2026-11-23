@@ -30,6 +30,14 @@ foreach ( [
 }
 
 require dirname( __DIR__ ) . '/src/YSCacheIntegrations.php';
+require dirname( __DIR__ ) . '/src/YSCachePublicForms.php';
+
+function shortcode_exists( string $tag ): bool {
+    return in_array( $tag, [ 'wpforms', 'fluentform', 'jet_fb_form' ], true );
+}
+
+function remove_filter( ...$args ): bool { return false; }
+function remove_action( ...$args ): bool { return false; }
 
 final class WP_Post {
     public function __construct( public string $post_content ) {}
@@ -180,6 +188,46 @@ expect_same( false, YSCacheIntegrations::cacheableHtml( $publicForm ), 'Public C
 expect_same( true, YSCacheIntegrations::cacheableHtml( $publicForm, true ), 'Plain public CF7 with verified hidden fields' );
 expect_same( false, YSCacheIntegrations::formContentRequiresBypass( '[contact-form-7 id="8"]', true ), 'Opt-in defers CF7 inspection until rendering' );
 expect_same( true, YSCacheIntegrations::formContentRequiresBypass( '[contact-form-7 id="8"][jet_fb_form form_id="4"]', true ), 'Opt-in protects mixed plugin shortcodes' );
+expect_same( true, YSCacheIntegrations::formContentRequiresBypass( '[fluentform_payment_view]', true ), 'Payment views stay private' );
+expect_same( true, YSCacheIntegrations::formContentRequiresBypass( '[jet_fb_form form_id="4"]', true ), 'Existing CF7 opt-in does not enable other vendors' );
+expect_same( false, YSCacheIntegrations::formContentRequiresBypass( '[jet_fb_form form_id="4"]', true, true ), 'Reviewed shortcode is inspected after rendering' );
+$simpleMarkup = new ReflectionMethod( \YangSheep\Cache\YSCachePublicForms::class, 'simpleMarkup' );
+foreach ( [
+    '[contact-form-7 id="f02a" title="Contact"]' => true,
+    '<!-- wp:shortcode -->[contact-form-7 id="8"]<!-- /wp:shortcode -->' => true,
+    '[contact-form-7 id="8"][dynamic_message]' => false,
+    '[contact-form-7 id="8"]<!-- wp:example/private /-->' => false,
+    '<aside>[contact-form-7 id="8"]</aside>' => false,
+] as $source => $eligible ) {
+    expect_same( $eligible, \YangSheep\Cache\YSCachePublicForms::dedicatedContactContent( $source ), $source );
+}
+foreach ( [ "ys-public-form/1\n[]", "ys-public-form/99\n[]", "ys-public-form/2\n", 'ordinary text', '<html>wpcf7-form</html>',
+    "ys-public-cf7/1\n<html>wpcf7-form</html>", "ys-public-cf7/1\n<html>" . $publicForm ] as $record ) {
+    expect_same( null, \YangSheep\Cache\YSCachePublicForms::unpack( $record ), 'Reject malformed or unrecognized public form record' );
+}
+if ( PHP_VERSION_ID < 80100 ) {
+    $simpleMarkup->setAccessible( true );
+}
+$wpForm = '<form method="post" class="wpforms-form" data-formid="5">%s</form>';
+foreach ( [
+    '<input type="text" name="email">' => true,
+    '<textarea name="message"></textarea>' => true,
+    '<textarea name="message">Private default</textarea>' => false,
+    '<input type="text" value="customer">' => false,
+    '<input type="hidden" name="custom_session">' => false,
+    '<input type="file">' => false,
+    '<div class="cf-turnstile"></div>' => false,
+    '<script>customScript();</script>' => false,
+] as $field => $expected ) {
+    expect_same( $expected, $simpleMarkup->invoke( null, sprintf( $wpForm, $field ), 'wpforms', 5 ), $field );
+}
+ob_start();
+\YangSheep\Cache\YSCachePublicForms::observeEnqueueStart();
+echo '<meta name="test-visitor" content="native">';
+\YangSheep\Cache\YSCachePublicForms::observeEnqueueEnd();
+$nativeOutput = ob_get_clean();
+expect_same( '<meta name="test-visitor" content="native">', $nativeOutput, 'Native enqueue output is preserved' );
+expect_same( null, \YangSheep\Cache\YSCachePublicForms::pack( '<html>public</html>' ), 'Direct enqueue output prevents local storage' );
 foreach ( [
     str_replace( 'data-status="init"', 'data-status="sent"', $publicForm ),
     str_replace( 'value=""', 'value="post-data"', $publicForm ),

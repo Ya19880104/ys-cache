@@ -270,6 +270,7 @@
                 exclude_agents: field('exclude_agents'),
                 ttl_paths: field('ttl_paths'),
                 public_cf7_paths: field('public_cf7_paths'),
+                public_form_fragments: field('public_form_fragments'),
                 assets: {
                     css_minify: field('css_minify'),
                     js_minify: field('js_minify'),

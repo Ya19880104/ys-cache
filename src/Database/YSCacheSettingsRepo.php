@@ -43,6 +43,7 @@ final class YSCacheSettingsRepo {
             'exclude_agents'  => '',
             'ttl_paths'       => '',
             'public_cf7_paths' => '',
+            'public_form_fragments' => false,
             'providers'       => [],
             'assets'          => [],
         ];

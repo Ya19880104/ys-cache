@@ -61,6 +61,7 @@ $mainFiles = @(
     'src/YSCacheLiteSpeed.php',
     'src/YSCacheNginx.php',
     'src/YSCacheProviders.php',
+    'src/YSCachePublicForms.php',
     'src/YSCacheStorage.php',
     'templates/admin/settings.php',
     'templates/cached-page.php',

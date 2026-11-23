@@ -134,7 +134,7 @@ final class YSCacheAdmin {
         }
         $cdnChanged = ( $candidate['alias_hosts'] ?? [] ) !== ( $before['providers']['alias_hosts'] ?? [] ) ||
             $candidate['cdn'] !== ( $before['providers']['cdn'] ?? [] );
-        $requestRules = array_flip( [ 'enabled', 'ttl_seconds', 'early_paths', 'ttl_paths', 'public_cf7_paths', 'exclude_paths', 'exclude_cookies', 'exclude_agents' ] );
+        $requestRules = array_flip( [ 'enabled', 'ttl_seconds', 'early_paths', 'ttl_paths', 'public_cf7_paths', 'public_form_fragments', 'exclude_paths', 'exclude_cookies', 'exclude_agents' ] );
         $rulesChanged = array_intersect_key( $saved, $requestRules ) !== array_intersect_key( $before, $requestRules );
         $results = $wasDelegated && ( ! $delegated ||
             YSCacheEnhanceIntegration::fingerprint( $beforeEnhance ) !==

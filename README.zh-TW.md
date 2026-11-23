@@ -14,7 +14,7 @@ YS CACHE 是 WordPress 的訪客 HTML 快取外掛，支援單頁與全站清除
 ## 設定與驗證整合
 
 - **HTML、路徑與表單。** 登入、結帳、購物車工作階段、預覽與私人回應會繞過快取。在「快取設定 → 排除」填寫 `/en/contact/` 等公開路徑。`/news/* 300` 可縮短符合快取條件的 HTML 效期，WordPress nonce 更新及回應檢查也可能讓它提早到期。外掛會偵測頁面內容、版型編輯器、小工具或頁尾實際輸出的表單。 [路徑及縮短效期](docs/cache-integrations.md#路徑規則與縮短快取效期)
-- **表單頁。** WPForms、Fluent Forms 與 JetFormBuilder 維持繞過 HTML 快取。「公開 Contact Form 7 路徑（Beta）」可讓指定網址中符合條件的簡單訪客表單使用本機 YS CACHE HTML 快取，最長五分鐘。若要讓外層頁面保持可快取、表單維持即時渲染，可內嵌獨立排除的同源表單頁。 [表單設定及測試](docs/cache-integrations.md#表單和快取效期)
+- **表單頁。** 在「公開表單路徑（Beta）」填入聯絡頁及各語系路徑。符合條件的簡單表單頁可使用最多五分鐘的本機 HTML 快取。WPForms Lite、Fluent Forms 與 JetFormBuilder 會為每位訪客重新產生欄位，Contact Form 7 則可重用公開表單內容。 [支援版本及設定](docs/cache-integrations.md#表單和快取效期)
 - **訪客 HTML 提前快取。** 在「快取設定 → HTML 快取」指定確切的公開 HTTPS 路徑，讓符合條件的訪客在 WordPress 啟動前收到 HTML。選用 PixelYourSite Beta 整合後，符合條件的訪客直接開啟首頁時，可以重用首頁 HTML，並各自載入私有追蹤資料。另可啟用 Blocksy 商店公開內容快取，讓符合條件的分類與商品頁重用主內容，同時保留各訪客的頁首頁尾與追蹤資料。 [提前快取設定與驗證](docs/cache-integrations.md#訪客-html-提前快取與-pixelyoursitebeta)
 - **Elementor 與 PixelYourSite。** 啟用 Elementor 原生元件快取後，本機 YS CACHE 模式下符合條件的已發布單一內容頁可重用 Elementor 文件片段，WordPress 會繼續為每位訪客產生追蹤資料。 [Elementor 快取標頭及清除](docs/cache-integrations.md#elementor-片段快取與-pixelyoursite)
 - **CSS 與 JavaScript。** CSS 壓縮、JS 壓縮及延後執行 JS 可各自啟用，預設關閉。排除規則可填代號或路徑。要延後執行某支腳本，請明確填入它在 WordPress 的註冊代號，並測試會用到它的功能。

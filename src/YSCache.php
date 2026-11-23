@@ -205,6 +205,7 @@ final class YSCache {
             'exclude_agents'  => self::lines( $settings['exclude_agents'] ),
             'ttl_paths'       => self::lines( $settings['ttl_paths'] ),
             'public_cf7_paths' => self::lines( $settings['public_cf7_paths'] ),
+            'public_form_fragments' => ! empty( $settings['public_form_fragments'] ),
             'assets'          => YSCacheAssetOptimization::sanitize( (array) $settings['assets'] ),
             'providers'       => YSCacheProviders::sanitize(
                 is_array( $settings['providers'] ) ? $settings['providers'] : [],
@@ -699,10 +700,18 @@ final class YSCache {
         }
 
         $paths = $settings['public_cf7_paths'];
-        $localContactForm = $paths !== '' && self::usesLocalHtml( $settings ) && YSCacheIntegrations::supportsPublicContactForms() &&
-            ( self::match( $paths, $uri, 'path' ) || self::match( $paths, $decoded, 'path' ) );
+        $fragments = ! empty( $settings['public_form_fragments'] );
+        $localContactForm = $paths !== '' && self::usesLocalHtml( $settings ) &&
+            ( self::match( $paths, $uri, 'path' ) || self::match( $paths, $decoded, 'path' ) ) &&
+            ( $fragments ? YSCachePublicForms::fingerprint() !== '' : YSCacheIntegrations::supportsPublicContactForms() );
+        if ( $localContactForm && ! $fragments ) {
+            $post = get_queried_object();
+            if ( ! $post instanceof \WP_Post || ! YSCachePublicForms::dedicatedContactContent( $post->post_content ) ) {
+                return null;
+            }
+        }
         if ( ! self::hasCanonicalAuthority() ||
-            YSCacheIntegrations::bypass( $localContactForm ) || ! apply_filters( 'ys_cache_allow_request', true, $uri ) ) {
+            YSCacheIntegrations::bypass( $localContactForm, $fragments ) || ! apply_filters( 'ys_cache_allow_request', true, $uri ) ) {
             return null;
         }
         return $uri;
@@ -835,6 +844,8 @@ final class YSCache {
         if ( $localContactForm ) {
             $settings['ttl_seconds'] = min( $settings['ttl_seconds'], 300 );
             $this->edgeHtml = false;
+            $this->excludeLiteSpeedResponse();
+            self::sendPrivateNoStore();
         }
         $delegated = self::delegatesHtml( $settings );
         $local = self::usesLocalHtml( $settings );
@@ -844,7 +855,7 @@ final class YSCache {
             ? ! empty( $settings['providers']['nginx']['rules_verified'] ) && YSCacheNginx::configured()
             : ! empty( $settings['providers']['enhance']['rules_verified'] ) );
         $this->edgeHtml = $sharedSafe && $this->edgeHtml && ( ! $delegated || $fastcgi );
-        $this->liteSpeedCandidate = $this->liteSpeedHtml && $externalLanguageSafe && ! $delegated &&
+        $this->liteSpeedCandidate = ! $localContactForm && $this->liteSpeedHtml && $externalLanguageSafe && ! $delegated &&
             ! empty( $settings['providers']['litespeed']['rules_verified'] );
         if ( $this->liteSpeedHtml && ! $this->liteSpeedCandidate ) {
             $this->excludeLiteSpeedResponse();
@@ -888,10 +899,27 @@ final class YSCache {
         $key = hash( 'sha256', implode( "\n", [
             YS_CACHE_VERSION, home_url(), is_ssl() ? 'https' : 'http', $path, determine_locale(), $language, $nonce,
             implode( ':', $this->requestPageGenerations ), hash( 'sha256', serialize( $settings ) ),
-            $localContactForm ? (string) WPCF7_VERSION : '',
+            $localContactForm ? ( ! empty( $settings['public_form_fragments'] ) ? YSCachePublicForms::fingerprint() : 'local-cf7/2:' . WPCF7_VERSION ) : '',
         ] ) );
         $remaining = null;
         $html = YSCacheStorage::read( $directory, $key, $settings['ttl_seconds'], $remaining );
+        if ( $html !== null && $localContactForm ) {
+            $beforeForm = $this->htmlResponseHeaders();
+            try {
+                $html = YSCachePublicForms::unpack( $html );
+            } catch ( \Throwable $failure ) {
+                $html = null;
+            }
+            if ( $beforeForm !== $this->htmlResponseHeaders() || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ) {
+                $html = null;
+            }
+            if ( $html === null ) {
+                // A visitor-specific replay can change the output. Never store that native fallback as a new shared entry.
+                $this->excludeLiteSpeedResponse();
+                $this->captureAssets( $settings['providers'] );
+                return $template;
+            }
+        }
         if ( $html !== null ) {
             if ( $this->earlySnapshot !== null && $this->originCacheControl !== null && ! $localContactForm
                 && $_SERVER['REQUEST_METHOD'] === 'GET' && $this->rewriteAssetsHere()
@@ -924,20 +952,32 @@ final class YSCache {
             return;
         }
         $baseline = $this->htmlResponseHeaders();
+        $fragments = $localContactForm;
+        if ( $fragments ) {
+            YSCachePublicForms::capture();
+        }
         $shared = $fastcgi || $this->edgeHtml ? $this->sharedHtmlState( $nonce, $settings['ttl_seconds'], $fastcgi ) : null;
         $complete = true;
-        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm, $earlyOnly ): string {
+        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm, $fragments, $earlyOnly ): string {
             if ( !( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
                 $complete = false;
                 return $html;
             }
             $responseHtml = $this->rewriteAssets( $html, $settings['providers'] );
+            $record = $html;
+            if ( $fragments ) {
+                try {
+                    $record = YSCachePublicForms::pack( $html );
+                } catch ( \Throwable $failure ) {
+                    $record = null;
+                }
+            }
             $status = http_response_code();
             if ( ! $complete || headers_sent() || ( $status !== false && $status !== 200 ) ||
                 $this->htmlResponseHeaders() !== $baseline || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ||
                 ! self::isCompleteHtml( $html ) ||
                 preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) ||
-                ! YSCacheIntegrations::cacheableHtml( $html, $localContactForm ) ||
+                $record === null || ( ! $fragments && ! YSCacheIntegrations::cacheableHtml( $html, $localContactForm ) ) ||
                 ! apply_filters( 'ys_cache_allow_html', true, $html ) ) {
                 if ( $directory !== null && ! headers_sent() ) {
                     header( 'X-YS-Cache: BYPASS', true );
@@ -947,7 +987,7 @@ final class YSCache {
 
             if ( $directory !== null ) {
                 if ( ! $earlyOnly ) {
-                    YSCacheStorage::write( $directory, $key, $html );
+                    YSCacheStorage::write( $directory, $key, $record );
                 }
                 if ( ! $localContactForm && $this->rewriteAssetsHere() ) {
                     $this->storeEarly( $settings, $responseHtml, $baseline );

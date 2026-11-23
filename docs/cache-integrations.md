@@ -88,9 +88,18 @@ For a storefront check, click from the homepage to a category, open a product, t
 
 YS CACHE checks the current page’s shortcodes and blocks and inspects the rendered output. A form in a shared footer or builder template can affect every page where it appears. WPForms, Fluent Forms, and JetFormBuilder default to bypass because rendered forms can include expiring tokens, session data, dynamic fields, and payment or validation state. Contact Form 7 normally bypasses too. [WPForms cache and form tokens](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms payments and caching](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
 
-### Simple public Contact Form 7 pages (Beta)
+### Simple public form pages (Beta)
 
-Add the public page paths to **Public Contact Form 7 paths (Beta)** to opt in. Use this with the local YS CACHE HTML mode on Contact Form 7 6.2.x for simple guest forms. Add each translated URL you intend to cache. Eligible pages expire after at most 300 seconds, with shorter path or global limits taking precedence. Use server and CDN bypass rules for these form paths.
+In **Public form paths (Beta)**, enter each public path on its own line, such as `/contact/` and `/en/contact/`. Eligible local HTML expires after five minutes or the shorter page lifetime. Exclude these HTML routes from upstream server and CDN caching. Origin responses use private, no-store headers.
+
+| Form and version | Eligible local HTML | Guest submission verified |
+| --- | --- | --- |
+| WPForms Lite 2.0.5.1 | A dedicated page containing one native form shortcode. The plugin creates fresh fields, timing token, referrer and script settings. | AJAX confirmation |
+| Fluent Forms 6.2.17, free edition | One simple public form with text, name, email or message fields. The plugin creates fresh fields and script settings. | AJAX success and saved test entry |
+| JetFormBuilder 3.6.8.2 | One public text or message form with a submit button and either no action or one Send Email action. The plugin creates fresh fields and signatures. | Native submission and success redirect |
+| Contact Form 7 6.2.x | A dedicated native shortcode page can reuse verified public form markup locally. A second shortcode or dynamic block bypasses the page. | Feedback endpoint on 6.2.5 |
+
+To enable the first three adapters, select the per-visitor rendering switch below the public path list. Existing Contact Form 7 paths keep their original scope until you turn it on. Builder-generated forms and footer widgets use native page rendering, preserving visitor-specific content around the form. Other versions and unsupported fields also use native page rendering. The local form adapter is opt-in and does not publish the HTML to an upstream CDN.
 
 Keep forms with payments, CAPTCHA, prefilled or private fields, login requirements, uploads, or custom form hooks on the bypass path. YS CACHE also bypasses the page when it detects another dynamic form or sensitive output. Keep the form’s protection and submission settings in place. Confirm the anonymous page renders and submit a test entry on a test host before using the option on a live site. [Contact Form 7 shortcode setup](https://contactform7.com/faq/)
 
@@ -200,9 +209,18 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 
 YS CACHE 會檢查當前頁面的短代碼、區塊及實際輸出。共用頁尾或版型含表單時，可能影響每個顯示表單的頁面。WPForms、Fluent Forms 和 JetFormBuilder 預設繞過快取，因為表單可能含會到期的權杖、工作階段資料、動態欄位或付款及驗證狀態。Contact Form 7 預設也會繞過。 [WPForms 快取與表單權杖](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms 付款及快取](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
 
-#### 簡單公開 Contact Form 7 頁面（Beta）
+#### 簡單公開表單頁面（Beta）
 
-在「公開 Contact Form 7 路徑（Beta）」填入要啟用的公開路徑。此選項適用於使用本機 YS CACHE HTML 的 Contact Form 7 6.2.x 簡單訪客表單。各語系網址需分別填寫。符合條件的頁面效期最長 300 秒，若路徑或全站效期較短，會採較短的值。請同時在伺服器及 CDN 排除這些表單網址。
+在「公開表單路徑（Beta）」每行填一個公開路徑，例如 `/contact/` 及 `/en/contact/`。本機頁面快取最多五分鐘，也會遵守較短的頁面效期。請在上層伺服器及 CDN 排除這些 HTML 路徑，來源站會送出 private、no-store 標頭。
+
+| 表單及版本 | 可使用本機快取的範圍 | 已驗證的訪客送出流程 |
+| --- | --- | --- |
+| WPForms Lite 2.0.5.1 | 頁面內容只有一個原生表單短代碼。每位訪客取得新的欄位、時間權杖、來源網址與腳本設定。 | AJAX 送出及成功確認 |
+| Fluent Forms 免費版 6.2.17 | 一張只有文字、姓名、電子郵件或留言欄位的公開表單。每位訪客取得新的表單及腳本設定。 | AJAX 成功並保存測試紀錄 |
+| JetFormBuilder 3.6.8.2 | 一張只有文字、留言、送出按鈕的公開表單，可沒有送出動作或只設定一個 Send Email 動作。每位訪客取得新的欄位及簽章。 | 原生送出並轉向成功頁 |
+| Contact Form 7 6.2.x | 只有一個原生短代碼的專用表單頁可在本機重用已驗證的公開內容。另含短代碼或動態區塊的頁面會繞過快取。 | 6.2.5 的表單回應端點 |
+
+若要啟用前三項整合，請開啟公開路徑下方的逐位訪客表單開關。既有 Contact Form 7 路徑會保留原來的範圍，直到你開啟這項設定。編輯器動態產生的表單與頁尾小工具會使用原生頁面渲染，保留表單周圍的訪客專屬內容。其他版本或欄位亦會回到原生渲染。此功能需明確填入路徑，產生的 HTML 限來源站使用。
 
 付款、CAPTCHA、預填或私人欄位、登入限制、檔案上傳及有自訂表單掛鉤的頁面維持排除。YS CACHE 若偵測到其他動態表單或敏感輸出，整頁也會繞過快取。請保留原本的表單防護及送出設定。上線前，請在測試站用訪客身分確認表單正常顯示並送出一筆測試資料。 [Contact Form 7 短代碼說明](https://contactform7.com/faq/)
 

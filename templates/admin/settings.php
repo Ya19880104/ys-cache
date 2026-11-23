@@ -327,12 +327,16 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                     <textarea name="ttl_paths" rows="4" maxlength="12000" placeholder="/news/* 300" aria-describedby="ys-cache-ttl-paths-help"><?php echo esc_textarea( $settings['ttl_paths'] ); ?></textarea>
                     <span class="description" id="ys-cache-ttl-paths-help"><?php esc_html_e( 'Enter a path and seconds per line. The shortest matching lifetime applies to eligible HTML.', 'ys-cache' ); ?></span>
                 </label>
-                <label><?php esc_html_e( 'Public Contact Form 7 paths (Beta)', 'ys-cache' ); ?>
+                <label><?php esc_html_e( 'Public form paths (Beta)', 'ys-cache' ); ?>
                     <textarea name="public_cf7_paths" rows="4" maxlength="12000" placeholder="/en/contact/" aria-describedby="ys-cache-cf7-help"><?php echo esc_textarea( $settings['public_cf7_paths'] ); ?></textarea>
-                    <span class="description" id="ys-cache-cf7-help"><?php esc_html_e( 'Enter one path per line. Eligible public Contact Form 7 forms use local YS CACHE HTML for up to 300 seconds.', 'ys-cache' ); ?></span>
+                    <span class="description" id="ys-cache-cf7-help"><?php esc_html_e( 'Enter one public path per line, including each translation. Eligible pages use local HTML for up to five minutes.', 'ys-cache' ); ?></span>
                 </label>
             </div>
-            <p class="description"><?php esc_html_e( 'Forms with visitor-specific data, payments, CAPTCHA, or unsupported fields bypass the cache. WPForms, Fluent Forms and JetFormBuilder remain excluded.', 'ys-cache' ); ?></p>
+            <label class="ys-cache-switch">
+                <input type="checkbox" name="public_form_fragments" <?php checked( ! empty( $settings['public_form_fragments'] ) ); ?>>
+                <span><?php esc_html_e( 'Also render supported WPForms Lite, Fluent Forms and JetFormBuilder forms per visitor on these paths', 'ys-cache' ); ?></span>
+            </label>
+            <p class="description"><?php esc_html_e( 'For a supported simple form, WPForms Lite, Fluent Forms, and JetFormBuilder render fresh fields for every visitor. Contact Form 7 can reuse eligible public markup. Keep private, prefilled, payment, and CAPTCHA forms excluded.', 'ys-cache' ); ?></p>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="opcache" id="ys-cache-panel-opcache" aria-labelledby="ys-cache-tab-opcache" hidden>
             <h2>OPcache</h2>
