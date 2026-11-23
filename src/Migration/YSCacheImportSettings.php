@@ -71,6 +71,115 @@ final class YSCacheImportSettings
         return ['settings' => $current, 'warnings' => $warnings, 'unsupported' => array_keys($unsupported)];
     }
 
+    public static function fromFlyingPress(array $source, array $current): array
+    {
+        $warnings = [];
+        $unsupported = [];
+        if (!isset($current['ttl_seconds']) && is_numeric($current['ttl'] ?? null)) {
+            $current['ttl_seconds'] = self::lifetime((float) $current['ttl'] * 60);
+        }
+        unset($current['ttl']);
+        $schedule = $source['cache_lifespan'] ?? 'never';
+        $schedules = wp_get_schedules();
+        $seconds = is_string($schedule) ? ($schedules[$schedule]['interval'] ?? 0) : 0;
+        if ($schedule === 'never' || !is_numeric($seconds) || $seconds <= 0) {
+            $warnings[] = __('The previous cache had no recognized expiry. The existing YS CACHE lifetime was kept.', 'ys-cache');
+        } else {
+            $current['ttl_seconds'] = self::lifetime((float) $seconds);
+            if ($seconds > self::MAX_LIFETIME_SECONDS) {
+                $warnings[] = __('The imported cache lifetime exceeded seven days. YS CACHE applied its seven-day limit.', 'ys-cache');
+            }
+        }
+
+        if (!empty($source['cache_mobile'])) {
+            $unsupported[] = 'cache_mobile';
+        }
+        $origin = rtrim(site_url(), '/');
+        foreach (['cache_bypass_urls' => 'exclude_paths', 'cache_bypass_cookies' => 'exclude_cookies'] as $field => $target) {
+            $rules = self::lines($current[$target] ?? '');
+            $sourceRules = $source[$field] ?? [];
+            if (!is_array($sourceRules) || count($sourceRules) > 2000) {
+                $unsupported[] = $field;
+                continue;
+            }
+            foreach ($sourceRules as $keyword) {
+                if ($keyword === '') {
+                    continue;
+                }
+                if (!is_string($keyword) || strlen($keyword) > 2048) {
+                    $unsupported[] = $field;
+                    break;
+                }
+                if ($target === 'exclude_cookies') {
+                    // The source uses a case-insensitive regular expression on cookie names.
+                    // A prefix can also safely cover an exact name or an anchored family.
+                    if (!preg_match('~^\^([a-z0-9_-]+)(?:\$|\.\*\$?)?$~iD', $keyword, $match)) {
+                        $unsupported[] = $field;
+                        break;
+                    }
+                    $rules[] = $match[1];
+                    continue;
+                }
+                // Source URL keywords are literal, case-insensitive substrings of the full site URL.
+                if (!preg_match('#^[\pL\pN/_.:%+~-]+$#uD', $keyword)) {
+                    $unsupported[] = $field;
+                    break;
+                }
+                if (stripos($origin, $keyword) !== false) {
+                    $rules[] = '/*';
+                    continue;
+                }
+                $rules[] = '*' . $keyword . '*';
+                // A keyword may start in the hostname/base path and end in the request path.
+                for ($length = min(strlen($origin), strlen($keyword) - 1); $length > 0; --$length) {
+                    if ($keyword[$length] === '/' && strcasecmp(substr($origin, -$length), substr($keyword, 0, $length)) === 0) {
+                        $rules[] = substr($keyword, $length) . '*';
+                    }
+                }
+            }
+            $current[$target] = implode("\n", array_unique($rules));
+            if (strlen($current[$target]) > 12000) {
+                $unsupported[] = $field;
+            }
+        }
+
+        foreach (['css_minify', 'js_minify'] as $key) {
+            if (array_key_exists($key, $source)) {
+                $current['assets'][$key] = !empty($source[$key]);
+            }
+        }
+        if (!empty($source['js_defer']) || !empty($source['js_delay']) || !empty($source['css_rucss'])) {
+            $warnings[] = __('Review deferred scripts, delayed scripts and unused CSS separately in asset settings.', 'ys-cache');
+        }
+        if (!empty($source['cache_ignore_queries']) || !empty($source['cache_include_queries']) || !empty($source['cache_logged_in'])) {
+            $warnings[] = __('YS CACHE applies its public-page rules to requests with query parameters and signed-in visitors.', 'ys-cache');
+        }
+        if (!empty($source['cdn'])) {
+            $layers = $current['providers']['cdn'] ?? [];
+            $raw = self::text($source['cdn_url'] ?? '');
+            $url = parse_url($raw);
+            $host = strtolower($url['host'] ?? '');
+            $type = $source['cdn_file_types'] ?? '';
+            if (($source['cdn_type'] ?? '') !== 'custom' || !in_array($type, ['all', 'image', 'css_js_font'], true)
+                || !in_array($url['scheme'] ?? '', ['http', 'https'], true) || ($url['path'] ?? '/') !== '/'
+                || array_intersect(['user', 'pass', 'query', 'fragment', 'port'], array_keys($url ?: []))
+                || !str_contains($host, '.') || !filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME)
+                || filter_var($host, FILTER_VALIDATE_IP) || count($layers) >= YSCacheProviders::MAX_CDN_LAYERS
+                || array_filter($layers, static fn($row) => !empty($row['rewrite_urls']) || !empty($row['rewrite_images']))) {
+                $warnings[] = __('Review the previous CDN configuration and connect any provider purge API in YS CACHE.', 'ys-cache');
+            } else {
+                $layers[] = ['provider' => 'cname', 'hostname' => $host, 'scope' => $type === 'css_js_font' ? 'code' : 'static',
+                    'enabled' => false, 'rewrite_images' => $type === 'image', 'rewrite_urls' => $type !== 'image'];
+                $current['providers']['cdn'] = $layers;
+                if ($type === 'css_js_font') {
+                    $warnings[] = __('The CDN now rewrites JavaScript and CSS. Review font delivery separately.', 'ys-cache');
+                }
+            }
+        }
+
+        return ['settings' => $current, 'warnings' => $warnings, 'unsupported' => array_values(array_unique($unsupported))];
+    }
+
     private static function lifetime(float $seconds): int
     {
         return (int) max(1, min(self::MAX_LIFETIME_SECONDS, $seconds));

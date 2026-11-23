@@ -85,6 +85,22 @@ namespace {
     function add_filter($name, $callback, $priority) { $GLOBALS['filters'][$name] = $callback; }
     function remove_filter($name, $callback, $priority) { unset($GLOBALS['filters'][$name]); }
 
+    function site_url() { return 'https://store.example.test'; }
+    function wp_get_schedules() { return ['twicedaily' => ['interval' => 43200], 'monthly' => ['interval' => 2635200]]; }
+    function apply_filters($name, $value) { return $value; }
+    function has_action($name, $callback) {
+        foreach ($GLOBALS['actions'][$name] ?? [] as $priority => $group) {
+            foreach ($group as [$registered]) {
+                if ($registered === $callback) { return $priority; }
+            }
+        }
+        return false;
+    }
+    function remove_action($name, $callback, $priority) {
+        $GLOBALS['actions'][$name][$priority] = array_values(array_filter($GLOBALS['actions'][$name][$priority],
+            static fn($item) => $item[0] !== $callback));
+    }
+
     function add_action($name, $callback, $priority = 10, $acceptedArgs = 1): void
     {
         $GLOBALS['actions'][$name][$priority][] = [$callback, $acceptedArgs];
@@ -136,6 +152,12 @@ namespace {
     {
         $GLOBALS['events'][] = 'deactivate:' . $file;
         $GLOBALS['active'] = array_values(array_diff($GLOBALS['active'], [$file]));
+        if ($file === 'flying-press/flying-press.php') {
+            verify(YSCacheImport::pending() && wp_next_scheduled(RECOVERY_EVENT), 'source recovery armed before deactivation');
+            verify(has_action('deactivate_' . $file, ['FlyingPress\WPCache', 'remove_constant']) === false, 'native WP_CACHE stays set');
+            verify(has_action('deactivate_' . $file, ['FlyingPress\AdvancedCache', 'remove_advanced_cache']) === 10, 'native cleanup stays registered');
+            unlink(ABSPATH . 'advanced-cache.php');
+        }
         if ($file === SOURCE_PLUGIN_FILE) {
             verify(YSCacheImport::pending() && wp_next_scheduled(RECOVERY_EVENT), 'recovery is scheduled before stopping the source plugin');
             $GLOBALS['config_preserved'] = ($GLOBALS['filters']['rocket_set_wp_cache_constant'] ?? '') === '__return_false';
@@ -214,8 +236,13 @@ namespace {
 
     function fresh_request(): void
     {
-        (new ReflectionProperty(YSCacheImport::class, 'sourceTouched'))->setValue(null, false);
-        (new ReflectionProperty(YSCacheMigrationState::class, 'exists'))->setValue(null, []);
+        foreach ([[YSCacheImport::class, 'sourceTouched', false], [YSCacheMigrationState::class, 'exists', []]] as [$class, $name, $initial]) {
+            $property = new ReflectionProperty($class, $name);
+            if (PHP_VERSION_ID < 80100) {
+                $property->setAccessible(true);
+            }
+            $property->setValue(null, $initial);
+        }
     }
 
     function fixture(bool $coreActive = true): void
@@ -358,6 +385,64 @@ namespace {
     verify($result['settings']['ttl_seconds'] === 604800 && count($result['warnings']) === 1, 'long lifetimes are capped at seven days');
     $result = YSCacheImportSettings::convert(['purge_cron_interval' => 0], ['ttl' => 37]);
     verify($result['settings']['ttl_seconds'] === 2220 && !isset($result['settings']['ttl']), 'legacy lifetime survives an indefinite source value');
+
+    $fp = 'flying-press/flying-press.php';
+    $fpTemplate = "<?php\n// Synthetic importer fixture\n\$config = CONFIG_TO_REPLACE;\nreturn null;";
+    $fpConfig = ['cache_lifespan' => 'twicedaily', 'cache_bypass_urls' => ['/account/', 'store.example.test/private/'],
+        'cache_bypass_cookies' => ['^guest_session_.*'], 'css_minify' => true, 'js_minify' => false,
+        'cdn' => true, 'cdn_type' => 'custom', 'cdn_url' => 'https://static.example.test', 'cdn_file_types' => 'all',
+        'license_key' => 'test-only-personal-license'];
+    $fpDir = WP_PLUGIN_DIR . '/flying-press/assets';
+    mkdir($fpDir, 0700, true);
+    try {
+        file_put_contents($fpDir . '/advanced-cache.php', $fpTemplate);
+        $flyingFixture = static function () use ($fp, $fpConfig, $fpTemplate): void {
+            fixture();
+            $GLOBALS['active'] = [CORE_FILE, $fp];
+            $GLOBALS['installed'][$fp] = ['Name' => 'FlyingPress', 'Version' => '4.16.4'];
+            $GLOBALS['options']['FLYING_PRESS_CONFIG'] = $fpConfig;
+            $GLOBALS['actions']['deactivate_' . $fp] = [];
+            add_action('deactivate_' . $fp, ['FlyingPress\AdvancedCache', 'remove_advanced_cache']);
+            add_action('deactivate_' . $fp, ['FlyingPress\WPCache', 'remove_constant']);
+            file_put_contents(ABSPATH . 'advanced-cache.php', str_replace('CONFIG_TO_REPLACE', var_export($fpConfig, true), $fpTemplate));
+        };
+        $flyingFixture();
+        $active = [$fp];
+        activate_plugin(CORE_FILE);
+        verify(!is_plugin_active($fp) && is_plugin_active(CORE_FILE) && $cache_settings['ttl_seconds'] === 43200,
+            'active source is selected over inactive competitor and cut over on activation');
+        verify($cache_settings['exclude_paths'] === "*/account/*\n*store.example.test/private/*\n/private/*"
+            && $cache_settings['exclude_cookies'] === 'guest_session_', 'URL substring, hostname overlap and cookie prefix transferred');
+        verify($cache_settings['providers']['cdn'][0]['rewrite_urls'] && $cache_settings['assets']['css_minify'] && !$cache_settings['assets']['js_minify'],
+            'scoped CDN rewriting and independent CSS and JS map to YS settings');
+        verify(!str_contains(json_encode([$cache_settings, $wpdb->records]), 'test-only-personal-license'), 'license is never copied');
+        $flyingFixture();
+        $options['FLYING_PRESS_CONFIG']['cache_bypass_cookies'] = ['has_(cart|session)'];
+        verify(YSCacheImport::migrate()->code === 'unsupported' && is_plugin_active($fp), 'unrepresentable cookie regex keeps source active');
+        $flyingFixture();
+        $GLOBALS['wp_filter']['flying_press_is_cacheable'] = (object) ['callbacks' => [[['function' => 'private_cart_rule']]]];
+        verify(YSCacheImport::migrate()->code === 'unsupported' && is_plugin_active($fp), 'custom page exclusion keeps source active');
+        unset($GLOBALS['wp_filter']['flying_press_is_cacheable']);
+        $flyingFixture();
+        file_put_contents(ABSPATH . 'advanced-cache.php', str_replace('CONFIG_TO_REPLACE', "array ('example' => custom_private_rule())", $fpTemplate));
+        verify(YSCacheImport::migrate()->code === 'dropin' && is_plugin_active($fp), 'custom executable content in drop-in refused');
+        $flyingFixture();
+        $active[] = SOURCE_PLUGIN_FILE;
+        verify(YSCacheImport::migrate()->code === 'source_conflict' && count($active) === 3, 'multiple active sources leave both active');
+        $flyingFixture();
+        $can_enable = false;
+        verify(YSCacheImport::migrate()->code === 'restore', 'native rollback pending after failure');
+        fresh_request();
+        do_action(RECOVERY_EVENT);
+        verify(is_plugin_active($fp) && !YSCacheImport::pending(), 'scheduled recovery restores correct source');
+        $flyingFixture();
+        $installed[$fp]['Version'] = '5.0.0';
+        verify(YSCacheImport::migrate()->code === 'version' && is_plugin_active($fp), 'unverified version stays active');
+    } finally {
+        unlink($fpDir . '/advanced-cache.php');
+        rmdir($fpDir);
+        rmdir(dirname($fpDir));
+    }
 
     echo "Automatic import regression checks passed.\n";
 }
