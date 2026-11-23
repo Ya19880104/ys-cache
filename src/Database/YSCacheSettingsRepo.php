@@ -37,6 +37,7 @@ final class YSCacheSettingsRepo {
             'auto_detect'     => true,
             'early_paths'     => '',
             'early_pixel_shell' => false,
+            'guest_template' => false,
             'exclude_paths'   => '',
             'exclude_cookies' => '',
             'exclude_agents'  => '',

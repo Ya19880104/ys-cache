@@ -5,6 +5,8 @@ defined( 'ABSPATH' ) || exit;
 $enhance = $providers['enhance'] ?? [];
 $opcache = $providers['opcache'] ?? [];
 $opcacheReady = \YangSheep\Cache\YSCacheProviders::opcacheAvailable();
+$storefrontReady = get_template() === 'blocksy' && defined( 'PYS_VERSION' ) &&
+    defined( 'WP_CACHE' ) && WP_CACHE && ! is_multisite();
 $opcacheUnavailable = __( 'This PHP runtime must have OPcache enabled and allow WordPress to reset it.', 'ys-cache' );
 $nginxSettings = $providers['nginx'] ?? [];
 $nginxReady = ! empty( $nginx['available'] );
@@ -243,6 +245,15 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <span class="ys-cache-switch-track" aria-hidden="true"></span>
                 <?php esc_html_e( 'Load private PixelYourSite tracking separately on supported direct homepage visits (beta)', 'ys-cache' ); ?>
             </label>
+            <label class="ys-cache-switch">
+                <input name="guest_template" type="checkbox" role="switch" <?php checked( ! empty( $settings['guest_template'] ) ); ?> <?php disabled( ! $storefrontReady ); ?>>
+                <span class="ys-cache-switch-track" aria-hidden="true"></span>
+                <?php esc_html_e( 'Cache public Blocksy storefront content with PixelYourSite (beta)', 'ys-cache' ); ?>
+            </label>
+            <p class="description"><?php esc_html_e( 'On compatible guest visits, WordPress reuses the public page content and renders the header, footer, and tracking for the current visitor. Cart, checkout, and account pages stay private.', 'ys-cache' ); ?></p>
+            <?php if ( ! $storefrontReady ) : ?>
+                <p class="description"><?php esc_html_e( 'Requires Blocksy, PixelYourSite, and WP_CACHE on a single-site installation.', 'ys-cache' ); ?></p>
+            <?php endif; ?>
             <h3><?php esc_html_e( 'Automatic purge', 'ys-cache' ); ?></h3>
             <label class="ys-cache-switch">
                 <input name="auto_purge" type="checkbox" role="switch" <?php checked( ! empty( $settings['auto_purge'] ) ); ?>>

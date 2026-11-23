@@ -214,8 +214,13 @@ namespace {
 
     function fresh_request(): void
     {
-        (new ReflectionProperty(YSCacheImport::class, 'sourceTouched'))->setValue(null, false);
-        (new ReflectionProperty(YSCacheMigrationState::class, 'exists'))->setValue(null, []);
+        foreach ([[YSCacheImport::class, 'sourceTouched', false], [YSCacheMigrationState::class, 'exists', []]] as [$class, $name, $initial]) {
+            $property = new ReflectionProperty($class, $name);
+            if (PHP_VERSION_ID < 80100) {
+                $property->setAccessible(true);
+            }
+            $property->setValue(null, $initial);
+        }
     }
 
     function fixture(bool $coreActive = true): void

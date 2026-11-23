@@ -10,6 +10,57 @@ final class YSCacheCarousel {
     private const RAW = "<!--.*?-->|<(?<raw>script|style|noscript|textarea|template)\b" . self::ATTRS . ">.*?</\k<raw>\s*>";
     private const IMAGE_ATTRS = [ 'src', 'class', 'alt', 'srcset', 'sizes', 'width', 'height', 'decoding', 'loading', 'fetchpriority' ];
 
+    /** Run on a public cache build before CDN rewriting. Only enrich the first desktop and mobile sources. */
+    public static function completeHeroSources( string $html ): string {
+        if ( ! str_contains( $html, 'ysslide-swiper' ) || ! class_exists( '\WP_HTML_Tag_Processor' ) ) {
+            return $html;
+        }
+        $uploads = rtrim( (string) ( wp_get_upload_dir()['baseurl'] ?? '' ), '/' ) . '/';
+        if ( ! str_starts_with( $uploads, rtrim( home_url( '/' ), '/' ) . '/' ) ) {
+            return $html;
+        }
+        $remaining = [ 'ysslidepcimg' => true, 'ysslidembimg' => true ];
+        $tags = new \WP_HTML_Tag_Processor( $html );
+        while ( $remaining && $tags->next_tag( 'IMG' ) ) {
+            $class = (string) $tags->get_attribute( 'class' );
+            if ( ! isset( $remaining[ $class ] ) ) {
+                continue;
+            }
+            unset( $remaining[ $class ] );
+            $url = (string) $tags->get_attribute( 'src' );
+            if ( $tags->get_attribute( 'srcset' ) !== null || ! str_starts_with( $url, $uploads ) ||
+                strpbrk( $url, "?#\\\r\n" ) !== false ||
+                ! preg_match( '~\A[0-9]{4}/(?:0[1-9]|1[0-2])/[^/]+\.(?:jpe?g|png|webp|avif)\z~iD', substr( $url, strlen( $uploads ) ) ) ) {
+                continue;
+            }
+            $id = attachment_url_to_postid( $url );
+            if ( ! $id || wp_get_attachment_url( $id ) !== $url || get_post_status( $id ) !== 'publish' ||
+                get_post_field( 'post_password', $id ) !== '' ) {
+                continue;
+            }
+            $parent = wp_get_post_parent_id( $id );
+            if ( $parent && ( get_post_status( $parent ) !== 'publish' || get_post_field( 'post_password', $parent ) !== '' ) ) {
+                continue;
+            }
+            $srcset = wp_get_attachment_image_srcset( $id, 'full' );
+            if ( ! is_string( $srcset ) || strlen( $srcset ) > 8192 ) {
+                continue;
+            }
+            $base = substr( $url, 0, strrpos( $url, '/' ) + 1 );
+            foreach ( explode( ',', $srcset ) as $candidate ) {
+                if ( ! preg_match( '~\A(\S+)\s+[1-9]\d{0,4}w\z~D', trim( $candidate ), $match ) ||
+                    ! str_starts_with( $match[1], $base ) || strpbrk( substr( $match[1], strlen( $base ) ), '/?#\\' ) !== false ) {
+                    continue 2;
+                }
+            }
+            $tags->set_attribute( 'srcset', $srcset );
+            if ( $tags->get_attribute( 'sizes' ) === null ) {
+                $tags->set_attribute( 'sizes', '100vw' );
+            }
+        }
+        return $tags->get_updated_html();
+    }
+
     public static function rewriteHtml( string $html ): string {
         if ( ! str_contains( $html, 'ysslide-swiper' ) || str_contains( $html, 'data-ys-cache-carousel' ) ||
             ! class_exists( '\WP_HTML_Tag_Processor' ) || ! self::allowsAssets( $html ) ) {
@@ -42,7 +93,57 @@ final class YSCacheCarousel {
             '<script defer id="ys-cache-carousel-js" src="' . esc_attr( $script ) . '"></script>';
         $output = preg_replace_callback( '~(?:' . self::RAW . ')(*SKIP)(*F)|</head\s*>~is',
             static fn ( array $match ): string => $assets . $match[0], $rewritten, 1, $count );
-        return $count === 1 && is_string( $output ) ? $output : $html;
+        return $count === 1 && is_string( $output ) ? self::deferNativeInitializer( $output ) : $html;
+    }
+
+    /** Let the native YS constructor run when its asynchronously supplied Swiper library is available. */
+    private static function deferNativeInitializer( string $html ): string {
+        if ( ! str_contains( $html, 'DOMContentLoaded' ) || ! preg_match_all( '~' . self::RAW . '~is', $html, $blocks, PREG_OFFSET_CAPTURE ) ) {
+            return $html;
+        }
+        $found = null;
+        foreach ( $blocks[0] as [ $raw, $offset ] ) {
+            if ( stripos( $raw, '<script' ) !== 0 || ! preg_match( '~\bnew\s+Swiper\s*\(\s*["\']\.ysslide-swiper["\']~', $raw ) ) {
+                continue;
+            }
+            // Only the standalone native initializer is eligible. Keep custom callbacks and nonce-bearing scripts intact.
+            if ( $found !== null || strlen( $raw ) > 4096 || ! preg_match( '~\A<script\s*>\s*document\.addEventListener\(' .
+                '\s*(["\'])DOMContentLoaded\1\s*,\s*function\s*\(\s*\)\s*\{\s*new\s+Swiper\s*\(' .
+                '\s*(["\'])\.ysslide-swiper\2\s*,\s*(?<options>\{.*\})\s*\)\s*;?\s*\}\s*\)\s*;?\s*</script\s*>\z~sD', $raw, $match ) ) {
+                return $html;
+            }
+            // A nested object of literal JS options can be moved verbatim without evaluating any site code.
+            $literal = <<<'REGEX'
+~
+(?(DEFINE)
+  (?<space> (?: \s++ | //[^\r\n]*+ | /\*(?:[^*]++|\*(?!/))*+\*/ )*+ )
+  (?<string> "(?:[^"\\\r\n]++|\\.)*+" | '(?:[^'\\\r\n]++|\\.)*+' )
+  (?<value> (?&object) | (?&string) | (?:true|false|null)\b | -?\d++(?:\.\d++)? )
+  (?<pair> (?: [a-zA-Z_$][a-zA-Z0-9_$]*+ | \d++ | (?&string) ) (?&space) : (?&space) (?&value) (?&space) )
+  (?<object> \{ (?&space) (?:(?&pair)(?: , (?&space) (?&pair))* (?: , (?&space))? )? \} )
+)
+\A (?&object) \z
+~xD
+REGEX;
+            if ( ! preg_match( $literal, $match['options'] ) ) {
+                return $html;
+            }
+            $found = [ $offset, strlen( $raw ), $match['options'] ];
+        }
+        if ( $found === null ) {
+            return $html;
+        }
+        $tags = new \WP_HTML_Tag_Processor( $html );
+        while ( $tags->next_tag( [ 'class_name' => 'ysslide-swiper' ] ) ) {
+            if ( $tags->get_attribute( 'data-ys-cache-carousel' ) === null ) {
+                return $html;
+            }
+        }
+        [ $offset, $length, $options ] = $found;
+        $script = '<script data-ys-cache-swiper-init>document.addEventListener("ys-cache:swiper-ready",function(event){' .
+            'var carousel=event.target;if(carousel.matches&&carousel.matches("[data-ys-cache-carousel]")' .
+            '&&!carousel.swiper&&typeof window.Swiper==="function"){new Swiper(carousel,' . $options . ');}});</script>';
+        return substr_replace( $html, $script, $offset, $length );
     }
 
     private static function rewriteSlides( string $slides ): ?string {
@@ -149,6 +250,6 @@ final class YSCacheCarousel {
             ( $asset['port'] ?? null ) !== ( $home['port'] ?? null ) ) {
             return '';
         }
-        return add_query_arg( 'ver', YS_CACHE_VERSION, $url );
+        return add_query_arg( 'ver', str_ends_with( $file, '.js' ) ? YS_CACHE_VERSION . '.2' : YS_CACHE_VERSION, $url );
     }
 }

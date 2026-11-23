@@ -69,7 +69,7 @@ final class YSCacheEarly {
 
     public static function sync( array $settings ): bool {
         $paths = self::paths( $settings['early_paths'] ?? '' );
-        if ( ! $paths || ! YSCache::usesLocalHtml( $settings ) || YSCache::hasEdgeHtml( $settings ) ) {
+        if ( ( ! $paths && empty( $settings['guest_template'] ) ) || ! YSCache::usesLocalHtml( $settings ) || YSCache::hasEdgeHtml( $settings ) ) {
             return self::remove();
         }
         if ( ! defined( 'WP_CACHE' ) || ! WP_CACHE || is_multisite() || self::host() === '' || YSCache::blockingCache( $settings ) !== '' ) {

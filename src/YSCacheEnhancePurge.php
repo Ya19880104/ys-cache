@@ -173,7 +173,7 @@ final class YSCacheEnhancePurge {
         $attempt = max( 0, (int) ( $pending['attempt'] ?? 0 ) );
         $updated = (int) ( $pending['updated_at'] ?? $now );
         $expires = $updated + self::RETRY_WINDOW;
-        if ( ( $stock && $batch === [] ) || ( $attempt > 0 && $now > $expires ) ) {
+        if ( ( $stock && $batch === [] ) || ( $pending['final_attempt'] ?? null ) === $pending['change'] ) {
             self::finish( $name, $pending, $batch, $stock && $batch === [] ? 'skipped' : 'error', false, 0, [] );
             return;
         }
@@ -184,6 +184,11 @@ final class YSCacheEnhancePurge {
             'updated_at' => $updated,
             'next_run'   => $now < $expires ? min( $now + $delay, $expires ) : $now + $delay,
         ] );
+        // A real scheduler can wake after the retry deadline. Reserve one last dispatch
+        // for this change, even then, without replaying it if its worker dies.
+        if ( $now >= $expires ) {
+            $claimed['final_attempt'] = $pending['change'];
+        }
         if ( ! YSCacheSettingsRepo::changePurgeRecord( $name, $pending, $claimed ) ) {
             return;
         }
@@ -246,6 +251,9 @@ final class YSCacheEnhancePurge {
                 }
                 $delay = $stock ? self::STOCK_COALESCE_SECONDS : self::COALESCE_SECONDS;
                 $next = $more ? array_replace( $next, [ 'attempt' => 0, 'next_run' => $now + $delay ] ) : null;
+                if ( $next !== null ) {
+                    unset( $next['final_attempt'] );
+                }
                 if ( ! YSCacheSettingsRepo::changePurgeRecord( $name, $pending, $next ) ) {
                     continue;
                 }

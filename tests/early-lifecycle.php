@@ -105,6 +105,11 @@ namespace {
         expect_same( $current, Store::read( $directory, $host, $path, $variant )['html'] ?? null, 'The new generation serves only the fresh content' );
 
         expect_same( true, Early::remove(), 'Detach again before replacing the host fixture' );
+        $templateOnly = array_replace( $settings, [ 'early_paths' => '', 'guest_template' => true ] );
+        expect_same( true, Early::sync( $templateOnly ), 'Template-only mode can provision protected warm storage' );
+        expect_same( true, Early::owned(), 'Reader with an empty allowlist cannot serve complete HTML' );
+        expect_same( true, Early::sync( array_replace( $templateOnly, [ 'guest_template' => false ] ) ), 'Disabling the last reader mode detaches' );
+        expect_same( false, Early::owned(), 'Empty route list with both modes disabled leaves no owned reader' );
         $thirdParty = "<?php\n// Another plugin owns this fixture.\n";
         expect_same( strlen( $thirdParty ), file_put_contents( $dropin, $thirdParty ), 'Create the third-party fixture' );
         expect_same( false, Early::sync( $settings ), 'Leave an independently owned drop-in installed' );

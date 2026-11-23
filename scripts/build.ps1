@@ -52,6 +52,7 @@ $mainFiles = @(
     'src/YSCacheCarousel.php',
     'src/YSCachePixel.php',
     'src/YSCachePixelWarm.php',
+    'src/YSCacheGuestTemplate.php',
     'src/YSCachePixelTransport.php',
     'src/YSCacheEnhanceIntegration.php',
     'src/YSCacheEnhancePurge.php',
@@ -63,6 +64,7 @@ $mainFiles = @(
     'src/YSCacheStorage.php',
     'templates/admin/settings.php',
     'templates/cached-page.php',
+    'templates/guest-template.php',
     'templates/early-reader.php',
     'vendor/autoload.php'
 )

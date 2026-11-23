@@ -25,7 +25,7 @@ namespace {
         'class-wp-token-map.php', 'utf8.php',
         'html-api/html5-named-character-references.php', 'html-api/class-wp-html-attribute-token.php',
         'html-api/class-wp-html-span.php', 'html-api/class-wp-html-doctype-info.php',
-        'html-api/class-wp-html-decoder.php', 'html-api/class-wp-html-tag-processor.php',
+        'html-api/class-wp-html-decoder.php', 'html-api/class-wp-html-text-replacement.php', 'html-api/class-wp-html-tag-processor.php',
     ] as $file ) {
         if ( is_file( $includes . $file ) ) {
             require_once $includes . $file;
@@ -34,6 +34,15 @@ namespace {
     require dirname( __DIR__ ) . '/src/YSCacheCarousel.php';
 
     function home_url(): string { return 'https://store.example.test'; }
+    function wp_get_upload_dir(): array { return [ 'baseurl' => home_url() . '/uploads' ]; }
+    function attachment_url_to_postid( string $url ): int { return $url === wp_get_attachment_url( 1 ) ? 1 : 0; }
+    function wp_get_attachment_url( int $id ): string { return home_url() . '/uploads/2026/11/mobile.jpg'; }
+    function get_post_status( int $id ): string { return 'publish'; }
+    function get_post_field( string $field, int $id ): string { return ''; }
+    function wp_get_post_parent_id( int $id ): int { return 0; }
+    function wp_get_attachment_image_srcset( int $id, string $size ): string {
+        return $GLOBALS['hero_srcset'];
+    }
 
     function plugins_url( string $file, string $plugin ): string {
         return ( $GLOBALS['carousel_asset_host'] ?? home_url() ) . '/wp-content/plugins/ys-cache/' . $file;
@@ -71,6 +80,13 @@ namespace {
     $body = fixture_hero( '' ) . $otherCarousel . $otherFallback . fixture_hero( '-second' );
     $page = '<!doctype html><html><head>' . $quoteInScript . '</head><body>' . $body . '</body></html>';
     $rendered = YSCacheCarousel::rewriteHtml( $page );
+    $hero = '<div class="ysslide-swiper"><img class="ysslidembimg" src="' . wp_get_attachment_url( 1 ) . '"></div>';
+    $hero_srcset = home_url() . '/uploads/2026/11/mobile-800x800.jpg 800w, ' . wp_get_attachment_url( 1 ) . ' 1000w';
+    $responsive = YSCacheCarousel::completeHeroSources( $hero );
+    expect( str_contains( $responsive, '800x800.jpg 800w' ) && str_contains( $responsive, 'sizes="100vw"' ), 'Use registered variants of the original public media file' );
+    $hero_srcset = 'https://elsewhere.example.test/private.jpg 800w';
+    expect( YSCacheCarousel::completeHeroSources( $hero ) === $hero, 'Reject filtered candidates from a different origin' );
+    expect( YSCacheCarousel::completeHeroSources( $responsive ) === $responsive, 'Preserve a supplied or translated responsive source' );
 
     expect( str_contains( $rendered, $quoteInScript ), 'Script text is unmodified' );
     expect( str_contains( $rendered, $otherCarousel ), 'Unrelated product carousel is unmodified' );
@@ -78,7 +94,7 @@ namespace {
     expect( substr_count( $rendered, 'data-ys-cache-carousel>' ) === 2, 'Both recognized hero instances are marked' );
     expect( substr_count( $rendered, 'id="ys-cache-carousel-js"' ) === 1 &&
         substr_count( $rendered, 'id="ys-cache-carousel-css"' ) === 1, 'External assets are inserted only once' );
-    expect( str_contains( $rendered, 'ys-cache-carousel.js?ver=test"></script></head>' ), 'Assets are attached to the real head' );
+    expect( str_contains( $rendered, 'ys-cache-carousel.js?ver=test.2"></script></head>' ), 'Assets are attached to the real head' );
     expect( substr_count( $rendered, 'fetchpriority="high"' ) === 2, 'Only the first slide of each hero gets high priority' );
     expect( substr_count( $rendered, '<noscript><picture ' ) === 8 &&
         substr_count( $rendered, 'hidden data-ys-cache-carousel-deferred' ) === 8, 'Inactive slides preserve a separate noscript fallback' );
@@ -91,6 +107,22 @@ namespace {
     expect( YSCacheCarousel::rewriteHtml( $rendered ) === $rendered, 'Already-optimized HTML is unchanged' );
 
     $markup = '<!doctype html><html><head></head><body>' . fixture_hero( '' ) . '</body></html>';
+    $options = "{loop:true,spaceBetween:7,pagination:{el:'.ysslidedots',clickable:true,},breakpoints:{1366:{// desktop\n},0:{slidesPerView:1}}}";
+    $native = "<script>document.addEventListener('DOMContentLoaded', function () { new Swiper('.ysslide-swiper', " . $options . "); });</script>";
+    $withNative = str_replace( '</body>', $native . '</body>', $markup );
+    $integrated = YSCacheCarousel::rewriteHtml( $withNative );
+    expect( str_contains( $integrated, 'data-ys-cache-swiper-init' ) && str_contains( $integrated, 'new Swiper(carousel,' . $options . ')' ),
+        'Keep the native literal options while waiting for Swiper' );
+    foreach ( [
+        str_replace( $options, '{on:{slideChange:function(){custom();}}}', $withNative ),
+        str_replace( '<script>', '<script nonce="existing">', $withNative ),
+        str_replace( '</body>', $native . '</body>', $withNative ),
+        str_replace( '</body>', '<div class="ysslide-swiper">custom</div></body>', $withNative ),
+        str_replace( $native, '<template>' . $native . '</template>', $withNative ),
+    ] as $unknown ) {
+        expect( ! str_contains( YSCacheCarousel::rewriteHtml( $unknown ), 'data-ys-cache-swiper-init' ),
+            'Custom, ambiguous, nonce-protected and inert initializers stay native' );
+    }
     foreach ( [
         str_replace( 'class="ysslidepcimg"', 'class="ysslidepcimg" data-lazy-src="/unknown.jpg"', $markup ),
         str_replace( '</head>', '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'"></head>', $markup ),

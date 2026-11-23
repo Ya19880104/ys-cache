@@ -1236,3 +1236,12 @@ msgstr "你的帳號沒有執行匯入的權限。"
 #: templates/admin/settings.php:568 src/Admin/YSCacheImportAdmin.php:61
 msgid "When you activate YS CACHE, it checks the active cache plugin and imports supported settings before enabling HTML caching."
 msgstr "啟用 YS CACHE 時，系統會檢查目前運作中的快取外掛，匯入支援的設定後再啟用 HTML 快取。"
+
+msgid "Cache public Blocksy storefront content with PixelYourSite (beta)"
+msgstr "快取使用 PixelYourSite 的 Blocksy 商店公開內容（Beta）"
+
+msgid "On compatible guest visits, WordPress reuses the public page content and renders the header, footer, and tracking for the current visitor. Cart, checkout, and account pages stay private."
+msgstr "在相容的訪客頁面，WordPress 會重用公開頁面內容，並為當前訪客產生頁首、頁尾和追蹤資料。購物車、結帳與會員頁維持私有。"
+
+msgid "Requires Blocksy, PixelYourSite, and WP_CACHE on a single-site installation."
+msgstr "需要單站 WordPress、Blocksy、PixelYourSite，並啟用 WP_CACHE。"

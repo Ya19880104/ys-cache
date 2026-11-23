@@ -52,6 +52,7 @@ final class YSCache {
         // PixelYourSite adds its enqueue and no-script hooks during template_redirect.
         add_action( 'template_redirect', [ $this, 'pixelResponse' ], PHP_INT_MAX );
         add_filter( 'template_include', [ $this, 'serveOrCapture' ], PHP_INT_MAX );
+        add_filter( 'wp_speculation_rules_href_exclude_paths', [ $this, 'excludeTrackedNavigations' ] );
         add_filter( 'trp_translated_html', [ $this, 'rewriteTranslatedHtml' ], PHP_INT_MAX, 4 );
         add_filter( 'litespeed_buffer_before', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
         add_filter( 'litespeed_buffer_finalize', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
@@ -72,6 +73,38 @@ final class YSCache {
             }
         }
         return $settings;
+    }
+
+    /** A speculative storefront render starts a tracking session before the visitor opens the link. */
+    public function excludeTrackedNavigations( array $paths ): array {
+        $settings = self::settings();
+        if ( ( empty( $settings['early_pixel_shell'] ) && empty( $settings['guest_template'] ) ) ||
+            ! self::usesLocalHtml( $settings ) || ! YSCacheIntegrations::hasVisitorEventRenderer() ) {
+            return $paths;
+        }
+        $paths[] = '/';
+        if ( function_exists( 'wc_get_permalink_structure' ) ) {
+            $structure = wc_get_permalink_structure();
+            foreach ( [ 'product_rewrite_slug', 'category_rewrite_slug', 'tag_rewrite_slug' ] as $key ) {
+                $base = trim( (string) ( $structure[ $key ] ?? '' ), '/' );
+                if ( $base !== '' && preg_match( '~^[\w/-]+$~uD', $base ) ) {
+                    $paths[] = '/' . $base . '/*';
+                }
+            }
+        }
+        if ( function_exists( 'wc_get_page_id' ) ) {
+            $homePath = rtrim( (string) wp_parse_url( home_url( '/' ), PHP_URL_PATH ), '/' ) . '/';
+            foreach ( [ 'shop', 'cart', 'checkout', 'myaccount' ] as $page ) {
+                $id = wc_get_page_id( $page );
+                $path = $id > 0 ? wp_parse_url( get_permalink( $id ), PHP_URL_PATH ) : null;
+                if ( is_string( $path ) && $path !== $homePath && str_starts_with( $path, $homePath ) ) {
+                    $relative = '/' . rtrim( substr( $path, strlen( $homePath ) ), '/' );
+                    $paths[] = $relative;
+                    $paths[] = $relative . '/*';
+                }
+            }
+        }
+        return array_values( array_unique( $paths ) );
     }
 
     public function pixelResponse(): void {
@@ -166,6 +199,7 @@ final class YSCache {
             'auto_detect'     => ! empty( $settings['auto_detect'] ),
             'early_paths'     => implode( "\n", YSCacheEarly::paths( self::lines( $settings['early_paths'] ?? '' ) ) ),
             'early_pixel_shell' => ! empty( $settings['early_pixel_shell'] ),
+            'guest_template' => ! empty( $settings['guest_template'] ),
             'exclude_paths'   => self::lines( $settings['exclude_paths'] ),
             'exclude_cookies' => self::lines( $settings['exclude_cookies'] ),
             'exclude_agents'  => self::lines( $settings['exclude_agents'] ),
@@ -599,7 +633,7 @@ final class YSCache {
         return false;
     }
 
-    private static function pathLifetime( int $lifetime, string $rules, string $path ): int {
+    public static function pathLifetime( int $lifetime, string $rules, string $path ): int {
         $decoded = rawurldecode( $path );
         foreach ( preg_split( '/\R/', $rules, -1, PREG_SPLIT_NO_EMPTY ) as $line ) {
             if ( preg_match( '~\A(/[^\s?#\\\\]*)\s+([1-9][0-9]{0,5})\z~', trim( $line ), $parts ) &&
@@ -610,9 +644,22 @@ final class YSCache {
         return $lifetime;
     }
 
-    private static function cachePath( array $settings, bool &$localContactForm, bool $nativeElementor = false ): ?string {
+    private static function cachePath( array $settings, bool &$localContactForm, bool $nativeElementor = false, bool $guestTemplate = false ): ?string {
         $uri = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
         $method = $_SERVER['REQUEST_METHOD'] ?? '';
+        if ( $guestTemplate ) {
+            $headers = $_SERVER;
+            // The native template validates the remaining cookies and PHP session before lookup.
+            unset( $headers['HTTP_COOKIE'] );
+            if ( YSCachePixelWarm::isTemplateWarm() ) {
+                unset( $headers[ YSCachePixelWarm::HEADER ] );
+            }
+            if ( YSCachePixelTransport::hasProtectedHeaders( $headers ) || ! empty( $headers['HTTP_X_FORWARDED_USER'] ) ||
+                ! empty( $headers['HTTP_PROXY_AUTHORIZATION'] ) || ! empty( $headers['HTTP_SEC_PURPOSE'] ) ||
+                ! empty( $headers['HTTP_PURPOSE'] ) || YSCacheEarlyStore::requestPath( $headers, [], YSCacheEarly::host() ) !== $uri ) {
+                return null;
+            }
+        }
         if ( ! in_array( $method, [ 'GET', 'HEAD' ], true ) || empty( $uri ) || strlen( $uri ) > 2048 ||
             strpos( $uri, '/' ) !== 0 || strpos( $uri, '//' ) !== false || strpbrk( $uri, "?#\\\r\n" ) !== false ||
             ! empty( $_GET ) || ! empty( $_SERVER['QUERY_STRING'] ) || ! empty( $_SERVER['HTTP_AUTHORIZATION'] ) ||
@@ -636,7 +683,8 @@ final class YSCache {
         foreach ( $_COOKIE as $name => $value ) {
             if ( ! is_string( $name ) ||
                 ( ! in_array( $name, $allowed, true ) && ! YSCacheIntegrations::isPublicCookie( $name, $value )
-                    && ! ( $nativeElementor && YSCacheIntegrations::isElementorAttributionCookie( $name ) ) ) ||
+                    && ! ( $nativeElementor && YSCacheIntegrations::isElementorAttributionCookie( $name ) )
+                    && ! ( $guestTemplate && YSCacheGuestTemplate::allowsAttributionCookie( $name, $value ) ) ) ||
                 self::match( $settings['exclude_cookies'], $name, 'prefix' ) ) {
                 return null;
             }
@@ -722,6 +770,29 @@ final class YSCache {
 
         $this->frontendTemplate = true;
         $localContactForm = false;
+        if ( ! empty( $settings['early_pixel_shell'] ) && $this->privateResponse && self::usesLocalHtml( $settings )
+            && $this->earlySnapshot !== null && YSCacheIntegrations::hasVisitorEventRenderer() && YSCachePixel::eligible() ) {
+            YSCachePixelWarm::schedule( $settings );
+        }
+        if ( ! empty( $settings['guest_template'] ) && self::usesLocalHtml( $settings ) &&
+            ( YSCachePixelWarm::isTemplateWarm() || ( ! YSCachePixelWarm::headerPresent() && $this->privateResponse ) ) &&
+            ! defined( 'YS_CACHE_PIXEL_FALLBACK' ) && ! defined( 'YS_CACHE_PIXEL_KIND' ) &&
+            ! is_user_logged_in() && ! is_404() && ! is_search() && ( ! is_singular() || ! post_password_required() ) &&
+            YSCacheIntegrations::hasVisitorEventRenderer() && YSCacheIntegrations::hasOnlyAttributionSession() &&
+            self::blockingCache( $settings ) === '' ) {
+            $profile = YSCachePixelWarm::profile( $_SERVER );
+            $path = $profile === null ? null : self::cachePath( $settings, $localContactForm, false, true );
+            if ( $path !== null && ! $localContactForm && YSCacheGuestTemplate::isPublicRoute( $path ) ) {
+                $this->excludeLiteSpeedResponse();
+                // The surrounding response remains private on both hits and neutral builds.
+                self::sendPrivateNoStore();
+                $delegatedTemplate = YSCacheGuestTemplate::route( $template, $settings, $path, $profile, YSCachePixelWarm::isTemplateWarm() );
+                if ( $delegatedTemplate !== $template ) {
+                    $this->captureAssets( $settings['providers'] );
+                    return $delegatedTemplate;
+                }
+            }
+        }
         if ( YSCachePixelWarm::isVerified() ) {
             $path = self::cachePath( $settings, $localContactForm );
             if ( $path === '/' && ! $this->privateResponse && $this->earlySnapshot !== null && ! $localContactForm
@@ -735,10 +806,6 @@ final class YSCache {
             // A neutral build must never populate a normal page cache or release upstream HTML.
             $this->excludeLiteSpeedResponse();
             return $template;
-        }
-        if ( ! empty( $settings['early_pixel_shell'] ) && $this->privateResponse && self::usesLocalHtml( $settings )
-            && $this->earlySnapshot !== null && YSCacheIntegrations::hasVisitorEventRenderer() && YSCachePixel::eligible() ) {
-            YSCachePixelWarm::schedule( $settings );
         }
         // Elementor already renders its dynamic widgets on every request. We can restrict
         // its existing document cache on session pages without sharing the full response.
@@ -931,6 +998,7 @@ final class YSCache {
             }
             $shell = YSCachePixel::shell( $html );
             if ( $shell !== null && YSCacheIntegrations::cacheableHtml( $shell ) && apply_filters( 'ys_cache_allow_html', true, $shell ) ) {
+                $shell = YSCacheCarousel::completeHeroSources( $shell );
                 $this->storeEarly( $settings, $this->rewriteAssets( $shell, $settings['providers'] ), $baseline );
             }
             return $html;

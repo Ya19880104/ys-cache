@@ -14,6 +14,15 @@ namespace PixelYourSite {
 }
 
 namespace YangSheep\Cache {
+    final class YSCacheGuestTemplate {
+        public static bool $stored = false;
+        public static function isPublicRoute( string $path ): bool {
+            return in_array( $path, [ '/shop/category/', '/shop/other/' ], true );
+        }
+        public static function hasEntry( array $settings, string $path, array $profile ): bool {
+            return self::$stored;
+        }
+    }
     final class YSCache {
         public static function settings( bool $fresh = false ): array { return $GLOBALS['settings']; }
         public static function usesLocalHtml( array $settings ): bool { return ! empty( $settings['local'] ); }
@@ -75,7 +84,7 @@ namespace {
     function wp_remote_retrieve_response_code( array $response ): int { return $response['response']['code']; }
     function wp_safe_remote_get( string $url, array $args ): array {
         ++$GLOBALS['requests'];
-        expect( $GLOBALS['home'] . '/', $url, 'Transport uses only the configured HTTPS homepage' );
+        expect( $GLOBALS['home'] . ( $GLOBALS['expected_path'] ?? '/' ), $url, 'Only the canonical signed URL is requested' );
         expect( 0, $args['redirection'], 'Transport cannot redirect' );
         expect( true, $args['sslverify'], 'Transport validates TLS' );
         expect( [], $args['cookies'], 'Transport sends no guest cookies' );
@@ -145,7 +154,18 @@ namespace {
             [ 'HTTP_ACCEPT_LANGUAGE' => str_repeat( 'a', 97 ) ],
             [ 'HTTP_SEC_CH_UA_MOBILE' => '?1' ],
         ] as $override ) {
-            expect( null, YSCachePixelWarm::profile( array_replace( $base, $override ) ), 'Reject unbounded or mobile profiles' );
+            expect( null, YSCachePixelWarm::profile( array_replace( $base, $override ) ), 'Reject unbounded or conflicting profiles' );
+        }
+        foreach ( [
+            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36',
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+        ] as $phone ) {
+            $mobile = array_replace( $base, [ 'HTTP_USER_AGENT' => $phone, 'HTTP_SEC_CH_UA_MOBILE' => '?1' ] );
+            expect( $phone, YSCachePixelWarm::profile( $mobile )['HTTP_USER_AGENT'], 'Mobile variant preserves exact UA' );
+            $mobile['HTTP_SEC_CH_UA_MOBILE'] = '';
+            expect( '', YSCachePixelWarm::profile( $mobile )['HTTP_SEC_CH_UA_MOBILE'], 'Resource without a device hint' );
+            $mobile['HTTP_SEC_CH_UA_MOBILE'] = '?0';
+            expect( null, YSCachePixelWarm::profile( $mobile ), 'Reject phone claiming a desktop device hint' );
         }
 
         expect( false, YSCachePixelWarm::primeForCli( $settings, $profile ), 'CLI API requires the WordPress CLI runtime' );
@@ -188,7 +208,7 @@ namespace {
         expect( 0, $requests, 'Enqueuing performs no HTTP request' );
         expect( true, isset( $actions['shutdown'][ PHP_INT_MAX ] ), 'Only a newly queued request sets up the shutdown kick' );
         $state = json_decode( file_get_contents( $directory . '/.pixel-warm.json' ), true );
-        expect( [ 'until', 'pending' ], array_keys( $state ), 'Pending state stays in the private early cache directory' );
+        expect( [ 'recent', 'pending' ], array_keys( $state ), 'Pending state stays in the private early cache directory' );
         expect( true, $state['pending']['expires'] <= time() + 300, 'A pending variant has a bounded lifetime' );
         ( $actions['shutdown'][ PHP_INT_MAX ] )();
         expect( 0, $requests, 'Failed completion of the visitor response leaves the request to Cron' );
@@ -287,6 +307,24 @@ namespace {
         YSCachePixelWarm::finishAndRun();
         expect( 3, $requests, 'The post-response worker and Cron claim the same task at most once' );
         expect( 2, $finish_calls, 'PHP-FPM completion runs only for a queued response' );
+        YSCachePixelWarm::cancel();
+        $expected_timeout = 8;
+        $expected_path = '/shop/category/';
+        $settings['guest_template'] = true;
+        $loopback = static function ( string $token, string $accept ) use ( $settings, $base, $expected_path ): void {
+            expect( true, str_starts_with( $token, 't.' ), 'A template job uses a distinct proof' );
+            $_SERVER = array_replace( $base, [ YSCachePixelWarm::HEADER => $token, 'HTTP_ACCEPT' => $accept, 'REQUEST_URI' => '/shop/other/' ] );
+            expect( false, YSCachePixelWarm::verified( $settings ), 'Cannot transfer proof to a different public route' );
+            $_SERVER['REQUEST_URI'] = $expected_path;
+            $_SERVER[ YSCachePixelWarm::HEADER ] = substr( $token, 2 );
+            expect( false, YSCachePixelWarm::verified( $settings ), 'Cannot exchange template proof for a full homepage' );
+            $_SERVER[ YSCachePixelWarm::HEADER ] = $token;
+            expect( true, YSCachePixelWarm::verified( $settings ), 'Accept intended catalog route' );
+            expect( true, YSCachePixelWarm::isTemplateWarm(), 'Only the verified catalog build is neutral' );
+            \YangSheep\Cache\YSCacheGuestTemplate::$stored = true;
+        };
+        expect( true, YSCachePixelWarm::primeForCli( $settings, $profile, $expected_path, true ), 'Public template artifact produced' );
+        expect( false, YSCachePixelWarm::primeForCli( $settings, $profile, '//outside.example/', true ), 'Never warm a network-path reference' );
         echo "Pixel warm scope, single-use proof, async coalescing, and sterile storage guards passed.\n";
     } finally {
         $entries = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ),

@@ -37,7 +37,7 @@ final class YSCachePixel {
         $warm = class_exists( YSCachePixelWarm::class ) && YSCachePixelWarm::isVerified();
         if ( ! defined( 'PYS_VERSION' ) || PYS_VERSION !== self::PYS_VERSION || ! function_exists( 'PixelYourSite\\PYS' ) ||
             did_action( 'wp' ) !== 1 || ! is_front_page() || ! is_singular() || is_user_logged_in() ||
-            is_preview() || post_password_required() || wp_is_mobile() || ! is_ssl() ||
+            is_preview() || post_password_required() || ( wp_is_mobile() && YSCachePixelWarm::profile( $_SERVER ) === null ) || ! is_ssl() ||
             ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' || ( $_SERVER['REQUEST_URI'] ?? '' ) !== '/' ||
             ( $_SERVER['HTTP_HOST'] ?? '' ) !== parse_url( home_url( '/' ), PHP_URL_HOST ) ||
             ! empty( $_SERVER['HTTP_REFERER'] ) || ! empty( $_GET ) || ! empty( $_SERVER['QUERY_STRING'] ) ||
@@ -114,8 +114,10 @@ final class YSCachePixel {
             return null;
         }
 
+        $following = substr( $html, strpos( $html, $scripts[0][0] ) + strlen( $scripts[0][0] ) );
+        $defer = self::nativeScriptCanDefer( $following ) ? ' defer' : '';
         $shell = str_replace( [ $scripts[0][0], $pixels[0][0] ], [
-            '<script id="ys-cache-pys-bootstrap" src="' . self::SCRIPT_URL . '" referrerpolicy="strict-origin-when-cross-origin"></script>',
+            '<script id="ys-cache-pys-bootstrap"' . $defer . ' src="' . self::SCRIPT_URL . '" referrerpolicy="strict-origin-when-cross-origin"></script>',
             '<noscript><img height="1" width="1" style="display: none;" src="' . self::PIXEL_URL .
                 '" referrerpolicy="strict-origin-when-cross-origin" alt=""></noscript>',
         ], $html );
@@ -133,6 +135,18 @@ final class YSCachePixel {
             }
         }
         return $shell;
+    }
+
+    private static function nativeScriptCanDefer( string $following ): bool {
+        // Defer the localization and its native consumer in document order only for the reviewed
+        // adjacent classic-script pair. Keep the synchronous bootstrap for modified markup.
+        if ( ! defined( 'PYS_URL' ) || stripos( $following, 'pysOptions' ) !== false ) {
+            return false;
+        }
+        $source = preg_quote( rtrim( PYS_URL, '/' ) . '/dist/scripts/public', '~' );
+        $version = preg_quote( self::PYS_VERSION, '~' );
+        return preg_match( '~\A[\t\n\f\r ]*<script id="pys-js" defer src="' . $source .
+            '(?:\.min)?\.js\?ver=' . $version . '"></script>~D', $following ) === 1;
     }
 
     /**

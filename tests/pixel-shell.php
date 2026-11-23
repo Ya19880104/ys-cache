@@ -76,6 +76,7 @@ namespace {
     }
     define( 'ABSPATH', __DIR__ );
     define( 'PYS_VERSION', '12.6.8' );
+    define( 'PYS_URL', 'https://store.example.test/wp-content/plugins/pixelyoursite-pro' );
     define( 'XOO_EL_VERSION', '4.0.4' );
     require dirname( __DIR__ ) . '/src/YSCachePixel.php';
 
@@ -183,6 +184,28 @@ namespace {
     expect( is_string( $shell ) && str_contains( $shell, YSCachePixel::SCRIPT_URL ) &&
         str_contains( $shell, YSCachePixel::PIXEL_URL ), 'Generated shell has both redirect slots' );
     expect( ! str_contains( $shell, $event['eventID'] ) && ! str_contains( $shell, 'pysOptions' ), 'No native event data remains' );
+    $native = '<script id="pys-js" defer src="' . PYS_URL . '/dist/scripts/public.js?ver=' . PYS_VERSION . '"></script>';
+    $deferred = '<script id="ys-cache-pys-bootstrap" defer ';
+    foreach ( [ $native, str_replace( 'public.js', 'public.min.js', $native ) ] as $consumer ) {
+        $pair = YSCachePixel::shell( str_replace( $fragment, "\n" . $consumer . $fragment, $html ) );
+        expect( is_string( $pair ) && strpos( $pair, $deferred ) !== false &&
+            strpos( $pair, $deferred ) < strpos( $pair, $consumer ), 'Native deferred PYS receives private data in order' );
+    }
+    foreach ( [
+        '',
+        str_replace( ' defer ', ' ', $native ),
+        str_replace( ' defer ', ' async ', $native ),
+        str_replace( ' defer ', ' defer async ', $native ),
+        str_replace( PYS_URL, 'https://cdn.example.test/other', $native ),
+        str_replace( 'public.js', 'custom.js', $native ),
+        '<script>window.beforePixel=true;</script>' . $native,
+        '<!-- wrapper -->' . $native,
+    ] as $consumer ) {
+        $custom = YSCachePixel::shell( str_replace( $fragment, $consumer . $fragment, $html ) );
+        expect( is_string( $custom ) && ! str_contains( $custom, $deferred ), 'Changed PYS order or strategy keeps synchronous localization' );
+    }
+    $reader = YSCachePixel::shell( str_replace( $fragment, $native . '<script>use(pysOptions);</script>' . $fragment, $html ) );
+    expect( $reader === null || ! str_contains( $reader, $deferred ), 'A later inline options reader preserves synchronous availability' );
     expect( YSCachePixel::shell( str_replace( '</main>', '<form action=""></form></main>', $html ) ) === null,
         'Unknown forms veto the shell' );
     expect( YSCachePixel::shell( str_replace( '</main>', '<script>var pys_late_event = {};</script></main>', $html ) ) === null,

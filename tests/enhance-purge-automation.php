@@ -427,12 +427,18 @@ namespace {
     verify( YSCacheEnhancePurge::lastResult()['status'] === 'error' && YSCacheEnhancePurge::lastResult()['next_attempt'] === 0, 'expiry reports a terminal error and no due retry' );
 
     $settings = prepare_fixture();
-    $responses = [ [ 'status' => 'error', 'http' => 503 ] ];
+    $responses = [ [ 'status' => 'error', 'http' => 503 ], [ 'status' => 'ok', 'http' => 200 ] ];
     content_change( $settings );
     $expiry = $now + 86400;
     run_worker( pending()['next_run'] );
-    run_worker( $expiry + 1 );
-    verify( count( $dispatched ) === 1 && ! pending(), 'late Cron never retries beyond the outage window' );
+    $on_dispatch = static function (): void {
+        $GLOBALS['last_claim'] = pending();
+    };
+    run_worker( $expiry + 300 );
+    verify( count( $dispatched ) === 2 && ! pending() && YSCacheEnhancePurge::lastResult()['status'] === 'ok', 'a late worker actually purges after the deadline' );
+    YSCacheSettingsRepo::writePurgeRecord( 'enhance_purge_pending', $last_claim );
+    run_worker( $last_claim['next_run'] );
+    verify( count( $dispatched ) === 2 && ! pending() && YSCacheEnhancePurge::lastResult()['status'] === 'error', 'an interrupted final attempt cannot cause unbounded repeat dispatch' );
 
     $old_settings = prepare_fixture();
     content_change( $old_settings );
@@ -474,6 +480,15 @@ namespace {
     verify( count( $stock_dispatched[0][0] ) === 3 && count( pending( true )['urls'] ) === 2, 'provider fanout limits the full job, not just the payload' );
     run_worker( pending( true )['next_run'] );
     verify( count( $stock_dispatched[1][0] ) === 2 && ! pending( true ), 'remaining targets run in the next stock window' );
+
+    prepare_fixture( [ 'enabled' => false ] );
+    $local_cache = true;
+    $stock_batch_limit = 3;
+    $responses = array_fill( 0, 2, [ 'status' => 'ok', 'http' => 200 ] );
+    stock_change( array_slice( $stock_urls, 0, 5 ) );
+    run_worker( $now + 90000 );
+    run_worker( pending( true )['next_run'] );
+    verify( count( $stock_dispatched ) === 2 && ! pending( true ), 'delayed stock work processes every batch after the deadline' );
 
     prepare_fixture( [ 'enabled' => false ] );
     $provider_settings['alias_hosts'] = [ 'de.shop.example.test' ];

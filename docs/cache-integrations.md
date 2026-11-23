@@ -72,11 +72,17 @@ Static CDN layers keep their URL rewriting and purge settings. When a verified C
 
 In **Cache settings → HTML cache**, enter one exact public path per line in **Early guest HTML cache paths**. This option requires local YS CACHE HTML, a single-site WordPress installation on HTTPS with `WP_CACHE` enabled, and an available `advanced-cache.php` drop-in. Choose public pages that give anonymous visitors the same content. Cookies, authorization, query strings and requests that need private content continue through WordPress. The early response preserves compatible origin security headers.
 
-To test PixelYourSite on the homepage, add `/` to the path list and turn on **Load private PixelYourSite tracking separately on supported direct homepage visits (beta)**. The beta checks the installed PixelYourSite version, tracking settings and rendered markup. It covers direct desktop homepage requests without cookies, referrers or query strings, using the same supported browser, language and device variant as the warmed copy. Supported requests load visitor-specific tracking in private same-origin responses. Visits with campaign parameters, referrals, user sessions, mobile or unsupported browsers continue through normal WordPress and PixelYourSite handling.
+To test PixelYourSite on the homepage, add `/` to the path list and turn on **Load private PixelYourSite tracking separately on supported direct homepage visits (beta)**. The beta checks the installed PixelYourSite version, tracking settings and rendered markup. It covers direct homepage requests without cookies, referrers or query strings, using the same supported browser, language and device variant as the warmed copy. Supported requests load visitor-specific tracking in private same-origin responses. Visits with campaign parameters, referrals, user sessions or unsupported browsers continue through normal WordPress and PixelYourSite handling.
 
-The first eligible miss queues a same-site HTTPS request with no visitor cookies or credentials. PHP-FPM can start the warm request after completing the visitor response, and WordPress Cron handles queued work on other hosts. A site uses one pending warm job and a two-minute cooldown. Use the canonical HTTPS hostname for the loopback. If the host provides private origin DNS, resolve that same hostname to the origin while keeping its valid TLS certificate and hostname. A blocked or unsuccessful warm leaves the visitor path dynamic.
+The first eligible miss queues a same-site HTTPS request with no visitor cookies or credentials. PHP-FPM can start the warm request after completing the visitor response, and WordPress Cron handles queued work on other hosts. Each site has one pending job at a time. A route and browser variant can be rebuilt once per two minutes, with up to six different builds in that interval. Use the canonical HTTPS hostname for the loopback. If the host provides private origin DNS, resolve that same hostname to the origin while keeping its valid TLS certificate and hostname. A blocked or unsuccessful warm leaves the visitor path dynamic.
 
-On the test site, open the canonical homepage directly in two separate clean browser sessions with the same desktop browser and language. Keep the Network panel’s **Disable cache** option off so it does not add cache-bypass request headers. Look for `X-YS-Cache: HIT` and `X-YS-Cache-Engine: early` on a new visit after the warm job finishes. Check that the tracking requests complete independently, retain distinct event IDs and carry private cache headers. Test a referral URL, login, mobile browser and cart as well.
+On the test site, open the canonical homepage directly in two separate clean browser sessions with the same supported browser and language. Keep the Network panel’s **Disable cache** option off so it does not add cache-bypass request headers. Look for `X-YS-Cache: HIT` and `X-YS-Cache-Engine: early` on a new visit after the warm job finishes. Check that the tracking requests complete independently, retain distinct event IDs and carry private cache headers. Test a referral URL, login, mobile browser and cart as well.
+
+### Public Blocksy storefront content (Beta)
+
+Enable **Cache public Blocksy storefront content with PixelYourSite** under **Cache settings → HTML cache** to reuse the main region of supported public storefront templates. This mode requires the local HTML cache and its early drop-in. The origin builds each entry with a separate, signed request. During a normal visit, WordPress renders the header, footer and tracking in the visitor's session. Check the HTML response for `X-YS-Cache-Engine: native-template` and `X-YS-Cache-Scope: public-main`. A private cache policy on that response keeps the assembled page out of shared CDNs. Cookies for login, checkout or a populated cart, unrecognized forms, and personalized templates retain their native behavior.
+
+For a storefront check, click from the homepage to a category, open a product, then return to the homepage. Record each document's first-byte time and compare with a second anonymous session. Inspect CSS, scripts, fonts and images separately for freshness, compression and transferred bytes. The origin web server or the configured CDN controls delivery of physical files.
 
 ## Forms and lifetime
 
@@ -102,7 +108,7 @@ Confirm that the site’s framing policy allows same-origin embeds. Check the co
 
 ## Background clearing and inventory
 
-Keep WordPress Cron running to process queued changes. Content edits use a 15-second window and inventory uses a 60-second window before becoming eligible. Temporary transport errors, rate limits and server errors retry with backoff for up to 24 hours. Check the last result and next attempt under **Cache Settings → HTML Cache**. LiteSpeed uses an HTTP request to `wp-cron.php` so the worker can detect the server cache.
+Keep WordPress Cron running to process queued changes. Content edits use a 15-second window and inventory uses a 60-second window before becoming eligible. Temporary transport errors, rate limits and server errors retry with backoff for 24 hours. If Cron misses the last scheduled run, the next worker makes one final attempt. Sites that disable visitor-triggered WP-Cron need a working server scheduler. An early HTML hit returns before WordPress can start its scheduler. Local HTML expiry is checked on each cache read. Check the last result and next attempt under **Cache Settings → HTML Cache**. LiteSpeed uses an HTTP request to `wp-cron.php` so the worker can detect the server cache.
 
 WooCommerce inventory updates clear the affected product and its published languages. A stock availability change also clears the shop, relevant category and tag archives, and the front page. Add pages that embed stock-sensitive content with the `ys_cache_stock_purge_urls` filter. Origin integrations that only support site-wide clearing leave automatic inventory purges to existing expiration and manual site-wide clearing.
 
@@ -178,11 +184,17 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 
 在「快取設定 → HTML 快取」的「訪客 HTML 提前快取路徑」每行輸入一個確切的公開路徑。此功能需要本機 YS CACHE HTML 快取、已開啟 `WP_CACHE` 的 HTTPS 單站 WordPress，以及可由 YS CACHE 使用的 `advanced-cache.php`。請選擇向所有匿名訪客提供相同內容的頁面。帶 Cookie、授權標頭、查詢字串或需載入私人內容的請求會由 WordPress 處理。提前快取的回應會保留相容的來源安全標頭。
 
-要在首頁測試 PixelYourSite，請將 `/` 加入路徑清單，再開啟「符合條件的直接首頁造訪會個別載入 PixelYourSite 私有追蹤資料（Beta）」。Beta 功能會檢查 PixelYourSite 版本、追蹤設定與實際輸出。它適用於無 Cookie、來源網址或查詢字串的直接桌機首頁造訪，瀏覽器、語言和裝置須符合已預熱的版本。符合條件的請求會各自從同站載入私有追蹤資料。含行銷參數、來源網址、使用者工作階段、行動瀏覽器或其他未支援瀏覽器的請求會照常由 WordPress 和 PixelYourSite 處理。
+要在首頁測試 PixelYourSite，請將 `/` 加入路徑清單，再開啟「符合條件的直接首頁造訪會個別載入 PixelYourSite 私有追蹤資料（Beta）」。Beta 功能會檢查 PixelYourSite 版本、追蹤設定與實際輸出。它適用於無 Cookie、來源網址或查詢字串的直接首頁造訪，瀏覽器、語言和裝置須符合已預熱的版本。符合條件的請求會各自從同站載入私有追蹤資料。含行銷參數、來源網址、使用者工作階段或未支援瀏覽器的請求會照常由 WordPress 和 PixelYourSite 處理。
 
-符合條件的首次未命中會排入同站 HTTPS 預熱，請求不帶訪客 Cookie 或憑證。PHP-FPM 可在完成訪客回應後啟動預熱，其他主機可由 WordPress Cron 處理排程。每站同時只有一筆待處理預熱，間隔至少兩分鐘。預熱會連到網站的正式 HTTPS 主機名稱。若主機提供私有來源 DNS，可讓同一主機名稱解析至來源站並保留有效的 TLS 憑證及主機名稱。預熱遭攔截或失敗時，訪客會繼續使用動態首頁。
+符合條件的首次未命中會排入同站 HTTPS 預熱，請求不帶訪客 Cookie 或憑證。PHP-FPM 可在完成訪客回應後啟動預熱，其他主機可由 WordPress Cron 處理排程。每站同時處理一筆預熱。相同路徑及瀏覽器版本的預熱至少間隔兩分鐘，同一時段最多啟動六筆不同預熱。預熱會連到網站的正式 HTTPS 主機名稱。若主機提供私有來源 DNS，可讓同一主機名稱解析至來源站並保留有效的 TLS 憑證及主機名稱。預熱遭攔截或失敗時，訪客會繼續使用動態首頁。
 
-請在測試站用相同桌機瀏覽器和語言，分別在兩個乾淨的瀏覽工作階段直接開啟正式首頁網址。保持開發工具「停用快取」選項關閉，避免測試請求帶有繞過快取的標頭。預熱完成後，確認新訪客的主文件帶有 `X-YS-Cache: HIT` 與 `X-YS-Cache-Engine: early`。確認各次造訪的追蹤請求都能完成，事件 ID 各自獨立，回應使用私有快取標頭。也請測試帶來源的造訪、登入、行動瀏覽器和購物車。
+請在測試站用相同的支援瀏覽器和語言，分別在兩個乾淨的瀏覽工作階段直接開啟正式首頁網址。保持開發工具「停用快取」選項關閉，避免測試請求帶有繞過快取的標頭。預熱完成後，確認新訪客的主文件帶有 `X-YS-Cache: HIT` 與 `X-YS-Cache-Engine: early`。確認各次造訪的追蹤請求都能完成，事件 ID 各自獨立，回應使用私有快取標頭。也請測試帶來源的造訪、登入、行動瀏覽器和購物車。
+
+#### Blocksy 商店公開內容快取（Beta）
+
+在「快取設定 → HTML 快取」啟用「快取使用 PixelYourSite 的 Blocksy 商店公開內容」。此功能需使用本機 HTML 快取及提前讀取模組。來源站透過獨立簽章請求建立受支援樣板的公開主內容。訪客點入頁面時，WordPress 會在該訪客的工作階段產生頁首、頁尾及追蹤資料。主文件同時帶有 `X-YS-Cache-Engine: native-template` 和 `X-YS-Cache-Scope: public-main` 時代表主內容已重用。組合後的回應會標為私有，以防共用 CDN 儲存。登入、結帳、商品已加入購物車、含未辨識表單或個人化樣板的請求會維持原有流程。
+
+驗收時，從首頁點入分類、開啟商品，再回首頁。用第二個獨立訪客重走一次，逐頁比較主文件的首位元組時間。另查看 CSS、JS、字型與圖片的有效期限、壓縮與傳輸量。實體檔案由來源站網頁伺服器或設定的 CDN 傳送。
 
 ### 表單和快取效期
 
@@ -208,6 +220,6 @@ YS CACHE 會檢查當前頁面的短代碼、區塊及實際輸出。共用頁�
 
 ### 背景清除與庫存
 
-請保持 WordPress Cron 運作，以處理排入佇列的變更。內容編輯先合併 15 秒，庫存變更先合併 60 秒，再由背景工作處理。連線中斷、限流和伺服器暫時錯誤會逐步拉長重試間隔，最長 24 小時。可在「快取設定 → HTML 快取」查看上次結果與下次嘗試時間。LiteSpeed 透過 HTTP 請求 `wp-cron.php`，讓背景工作能偵測伺服器快取。
+請保持 WordPress Cron 運作，以處理排入佇列的變更。內容編輯先合併 15 秒，庫存變更先合併 60 秒，再由背景工作處理。連線中斷、限流和伺服器暫時錯誤會在 24 小時內逐步拉長重試間隔。若 Cron 錯過最後排定的時間，下一次執行會補做最後一次嘗試。停用訪客觸發 WP-Cron 的網站需要主機排程。提前命中 HTML 時，請求會在 WordPress 啟動排程前結束。本機 HTML 每次讀取都會檢查到期時間。可在「快取設定 → HTML 快取」查看上次結果與下次嘗試時間。LiteSpeed 透過 HTTP 請求 `wp-cron.php`，讓背景工作能偵測伺服器快取。
 
 WooCommerce 庫存更新會清除受影響的商品頁及已發布的語系版本。可售狀態改變時，也會清除商店、相關分類與標籤彙整頁，以及首頁。若其他頁面嵌入會顯示庫存的內容，可以用 `ys_cache_stock_purge_urls` 加入清除範圍。若來源整合只支援整站清除，這些庫存變更會依原有快取效期更新，也可手動清除整站。

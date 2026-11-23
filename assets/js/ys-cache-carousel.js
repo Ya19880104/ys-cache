@@ -95,5 +95,63 @@
         sync();
     }
 
-    document.querySelectorAll('[data-ys-cache-carousel]').forEach(initialize);
+    const carousels = document.querySelectorAll('[data-ys-cache-carousel]');
+    carousels.forEach(initialize);
+
+    if (!carousels.length || !document.querySelector('script[data-ys-cache-swiper-init]')) {
+        return;
+    }
+
+    function waitForSwiper() {
+        let timer;
+        let delay = 60;
+        const deadline = Date.now() + 20000;
+
+        function stop() {
+            clearTimeout(timer);
+            document.removeEventListener('load', resourceLoaded, true);
+            window.removeEventListener('pagehide', stop);
+        }
+
+        function check() {
+            clearTimeout(timer);
+            if (typeof window.Swiper === 'function') {
+                stop();
+                for (const carousel of carousels) {
+                    if (carousel.isConnected && !carousel.swiper) {
+                        carousel.dispatchEvent(new Event('ys-cache:swiper-ready', {bubbles: true}));
+                    }
+                }
+                return;
+            }
+            if (Date.now() >= deadline) {
+                stop();
+                return;
+            }
+            timer = setTimeout(check, delay);
+            delay = Math.min(1000, delay * 2);
+        }
+
+        function resourceLoaded(event) {
+            if (event.target.tagName === 'SCRIPT') {
+                check();
+            }
+        }
+
+        document.addEventListener('load', resourceLoaded, true);
+        window.addEventListener('pagehide', stop, {once: true});
+        check();
+    }
+
+    if (document.readyState === 'complete') {
+        waitForSwiper();
+    } else {
+        const ready = () => {
+            document.removeEventListener('DOMContentLoaded', ready);
+            window.removeEventListener('load', ready);
+            waitForSwiper();
+        };
+        document.addEventListener('DOMContentLoaded', ready);
+        window.addEventListener('load', ready);
+    }
 })();

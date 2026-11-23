@@ -59,6 +59,10 @@ final class YSCachePixelTransport {
     }
 
     public static function shellEligible( array $server, array $cookies, string $host ): bool {
+        // WebKit can omit Sec-Fetch-User on a direct navigation. Its exact UA is checked by ticketVariant.
+        $gesture = ( $server['HTTP_SEC_FETCH_USER'] ?? '' ) === '?1' ||
+            ( ! array_key_exists( 'HTTP_SEC_FETCH_USER', $server ) &&
+                str_contains( (string) ( $server['HTTP_USER_AGENT'] ?? '' ), ') Version/' ) );
         return ! self::hasProtectedHeaders( $server )
             && YSCacheEarlyStore::requestPath( $server, $cookies, $host ) === '/'
             && ( $server['REQUEST_METHOD'] ?? '' ) === 'GET'
@@ -66,7 +70,7 @@ final class YSCachePixelTransport {
             && ( $server['HTTP_SEC_FETCH_SITE'] ?? '' ) === 'none'
             && ( $server['HTTP_SEC_FETCH_MODE'] ?? '' ) === 'navigate'
             && ( $server['HTTP_SEC_FETCH_DEST'] ?? '' ) === 'document'
-            && ( $server['HTTP_SEC_FETCH_USER'] ?? '' ) === '?1'
+            && $gesture
             && ( $server['HTTP_SEC_PURPOSE'] ?? '' ) === ''
             && ( $server['HTTP_PURPOSE'] ?? '' ) === ''
             && self::isBrowserAgent( $server )
@@ -307,13 +311,13 @@ final class YSCachePixelTransport {
         return $key !== null && hash_equals( self::sign( $key, $host, $variant, $parts[1] ), $parts[3] );
     }
 
-    /** Chromium can omit its desktop hint on noscript images. Only tickets share this normalization. */
+    /** A resource may omit the device hint. The validated UA stays bound to the private ticket. */
     private static function ticketVariant( array $server ): ?string {
         $profile = YSCachePixelWarm::profile( $server );
         if ( $profile === null ) {
             return null;
         }
-        $profile['HTTP_SEC_CH_UA_MOBILE'] = '?0';
+        $profile['HTTP_SEC_CH_UA_MOBILE'] = str_contains( $profile['HTTP_USER_AGENT'], ' Mobile' ) ? '?1' : '?0';
         return YSCacheEarlyStore::requestVariant( $profile );
     }
 

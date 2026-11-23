@@ -265,6 +265,7 @@
                 exclude_paths: field('exclude_paths'),
                 early_paths: field('early_paths'),
                 early_pixel_shell: field('early_pixel_shell'),
+                guest_template: field('guest_template'),
                 exclude_cookies: field('exclude_cookies'),
                 exclude_agents: field('exclude_agents'),
                 ttl_paths: field('ttl_paths'),

@@ -76,6 +76,12 @@ namespace {
         expect_same( null, Transport::prepareShell( $directory, $host, $html ), 'Fall through when the key is absent' );
         expect_same( true, Transport::provision( $directory ), 'Provision the private signing key' );
         expect_same( true, Transport::shellEligible( $request, [], $host ), 'Accept a direct cookieless homepage navigation' );
+        $safari = $request;
+        $safari['HTTP_USER_AGENT'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1';
+        unset( $safari['HTTP_SEC_FETCH_USER'], $safari['HTTP_SEC_CH_UA_MOBILE'] );
+        expect_same( true, Transport::shellEligible( $safari, [], $host ), 'Reviewed WebKit navigation without activation metadata' );
+        $safari['HTTP_SEC_PURPOSE'] = 'prefetch';
+        expect_same( false, Transport::shellEligible( $safari, [], $host ), 'WebKit speculation never opens a tracking session' );
         expect_same( false, Transport::shellEligible( $request, [ 'synthetic' => 'test' ], $host ), 'Reject a returning cookie' );
         foreach ( [
             [ 'HTTP_REFERER' => 'https://elsewhere.example.test/' ],
