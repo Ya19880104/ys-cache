@@ -15,7 +15,8 @@ final class YSCachePixelWarm {
     private const ACCEPT = 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8';
     private const COOLDOWN = 120;
     private const MAX_BUILDS = 6;
-    private const PENDING_TTL = 1200;
+    // An hourly host cron can need twelve runs to drain the bounded queue.
+    private const PENDING_TTL = 86400;
     private const MAX_PENDING = 24;
     private const MAX_STATE_BYTES = 98304;
     private const SIGNATURE_TTL = 45;
@@ -79,35 +80,43 @@ final class YSCachePixelWarm {
         }
         $directory = $context['directory'];
         $stamp = $context['stamp'];
+        $canFinish = function_exists( 'fastcgi_finish_request' );
         $afterResponse = false;
         $due = null;
-        $queued = self::lock( $directory, static function () use ( $context, $directory, $stamp, &$afterResponse, &$due ): bool {
+        $queued = self::lock( $directory, static function () use ( $context, $directory, $stamp, $canFinish, &$afterResponse, &$due ): bool {
             $now = time();
             $state = self::readState( $directory );
-            // Even a duplicate can repair a missed scheduler write from a previous request.
-            if ( isset( $state['queue'][ $stamp ] ) || count( $state['queue'] ) >= self::MAX_PENDING ) {
-                $due = self::nextDue( $state, $now );
+            $alreadyWaiting = isset( $state['queue'][ $stamp ] );
+            $wasIdle = ! $state['queue'];
+            $add = ! $alreadyWaiting && count( $state['queue'] ) < self::MAX_PENDING;
+            if ( $add ) {
+                $state['queue'][ $stamp ] = [
+                    'expires' => $now + self::PENDING_TTL,
+                    'profile' => $context['profile'],
+                    'path' => $context['path'],
+                    'template' => $context['template'],
+                    'attempt' => 0,
+                ];
+            }
+            // One returning visitor may volunteer for its own waiting variant once capacity opens.
+            // Keep the lease through dispatch so other requests cannot register another shutdown worker.
+            $claim = $canFinish && ( $wasIdle || ( $alreadyWaiting && empty( $state['kick_until'] ) ) ) &&
+                self::readyAt( $state, $stamp, $now ) === $now;
+            if ( $claim ) {
+                $state['kick_until'] = $now + self::SIGNATURE_TTL;
+            }
+            if ( ( $add || $claim ) && ! self::writeState( $directory, $state ) ) {
                 return false;
             }
-            // Only an idle queue may use the already-finished visitor response to warm its first item.
-            $afterResponse = ! $state['queue'] && self::readyAt( $state, $stamp, $now ) === $now;
-            $state['queue'][ $stamp ] = [
-                'expires' => $now + self::PENDING_TTL,
-                'profile' => $context['profile'],
-                'path' => $context['path'],
-                'template' => $context['template'],
-                'attempt' => 0,
-            ];
-            if ( ! self::writeState( $directory, $state ) ) {
-                return false;
-            }
+            $afterResponse = $claim;
+            // Another visit can repair a missed WP-Cron write without adding a duplicate job.
             $due = self::nextDue( $state, $now );
-            return true;
+            return $add;
         } );
         if ( $due !== null ) {
             self::wake( $due );
         }
-        if ( $queued && $afterResponse && function_exists( 'fastcgi_finish_request' ) ) {
+        if ( $afterResponse ) {
             self::$finishStamp = $stamp;
             add_action( 'shutdown', [ self::class, 'finishAndRun' ], PHP_INT_MAX );
         }
@@ -425,6 +434,9 @@ final class YSCachePixelWarm {
         $state = [ 'recent' => array_filter( (array) ( $data['recent'] ?? [] ), static fn( $expiry ) => is_int( $expiry ) && $expiry > $now ), 'queue' => [] ];
         if ( isset( $data['active'][0] ) && (int) $data['active'][0] > $now ) {
             $state['active'] = $data['active'];
+        }
+        if ( is_int( $data['kick_until'] ?? null ) && $data['kick_until'] > $now ) {
+            $state['kick_until'] = $data['kick_until'];
         }
         // Recover the previous single-pending file when updating an active site.
         $queue = (array) ( $data['queue'] ?? [] );

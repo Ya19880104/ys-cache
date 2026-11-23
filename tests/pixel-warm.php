@@ -18,7 +18,8 @@ namespace YangSheep\Cache {
         public static bool $stored = false;
         public static array $storedPaths = [];
         public static function isPublicRoute( string $path ): bool {
-            return in_array( $path, [ '/shop/category/', '/shop/other/' ], true );
+            return in_array( $path, [ '/shop/category/', '/shop/other/' ], true ) ||
+                preg_match( '~\A/shop/item-[0-9]{2}/\z~D', $path ) === 1;
         }
         public static function hasEntry( array $settings, string $path, array $profile ): bool {
             return self::$stored || ! empty( self::$storedPaths[ $path ][ $profile['HTTP_ACCEPT_LANGUAGE'] ] );
@@ -215,9 +216,9 @@ namespace {
         expect( 0, $requests, 'Enqueuing performs no HTTP request' );
         expect( true, isset( $actions['shutdown'][ PHP_INT_MAX ] ), 'Only a newly queued request sets up the shutdown kick' );
         $state = json_decode( file_get_contents( $directory . '/.pixel-warm.json' ), true );
-        expect( [ 'recent', 'queue' ], array_keys( $state ), 'Pending state stays in the private early cache directory' );
+        expect( [ 'recent', 'queue', 'kick_until' ], array_keys( $state ), 'Pending state and its completion lease stay in the private early cache directory' );
         expect( 2, count( $state['queue'] ), 'Both browser variants survive admission' );
-        expect( true, reset( $state['queue'] )['expires'] <= time() + 1200, 'A pending variant has a bounded lifetime' );
+        expect( true, reset( $state['queue'] )['expires'] <= time() + 86400, 'A pending variant has a bounded lifetime' );
         ( $actions['shutdown'][ PHP_INT_MAX ] )();
         expect( 0, $requests, 'Failed completion of the visitor response leaves the request to Cron' );
         YSCachePixelWarm::run();
@@ -472,6 +473,72 @@ namespace {
         $expected_paths = [ $second ];
         $tick();
         expect( [], $read()['queue'], 'Cron completes the second job' );
+
+        // An hourly host runner fires at :29. Enqueue at :30, then simulate the elapsed 59 minutes.
+        YSCachePixelWarm::cancel();
+        \YangSheep\Cache\YSCacheGuestTemplate::$storedPaths = [];
+        $write( [ 'recent' => $recent ] );
+        $paths = [];
+        for ( $i = 0; $i < 24; ++$i ) {
+            $paths[] = $path = sprintf( '/shop/item-%02d/', $i );
+            expect( true, $enqueue( $path ), 'Public route enters the saturated queue' );
+        }
+        $state = $read();
+        $firstExpiry = reset( $state['queue'] )['expires'];
+        expect( true, $firstExpiry >= time() + 23 * 3600, 'The queue outlives multiple hourly cron ticks' );
+        foreach ( $state['queue'] as &$job ) {
+            $job['expires'] -= 59 * 60;
+        }
+        unset( $job );
+        $state['recent'] = array_map( static fn( int $expiry ) => $expiry - 59 * 60, $state['recent'] );
+        $write( $state );
+        $beforeRequests = $requests;
+        $expected_paths = array_slice( $paths, 0, 2 );
+        $tick();
+        expect( $beforeRequests + 2, $requests, 'The delayed hourly tick warms the first two pending jobs' );
+        expect( array_slice( $paths, 2 ), array_column( $read()['queue'], 'path' ), 'All other jobs survive the hourly delay in order' );
+        for ( $i = 2; $i < 24; $i += 2 ) {
+            $state = $read();
+            foreach ( $state['queue'] as &$job ) {
+                $job['expires'] -= 3600;
+            }
+            unset( $job );
+            $state['recent'] = array_map( static fn( int $expiry ) => $expiry - 3600, $state['recent'] );
+            $write( $state );
+            $expected_paths = array_slice( $paths, $i, 2 );
+            $tick();
+        }
+        expect( [], $read()['queue'], 'Twelve hourly ticks drain all 24 jobs without new visitors' );
+        expect( $beforeRequests + 24, $requests, 'Every delayed variant is rendered exactly once' );
+
+        // Multiple visitors reach the same unbuilt variant between hourly ticks. Only one may help.
+        YSCachePixelWarm::cancel();
+        \YangSheep\Cache\YSCacheGuestTemplate::$storedPaths = [];
+        $write( [ 'recent' => $recent ] );
+        $beforeShutdown = $shutdown_registrations;
+        $beforeRequests = $requests;
+        expect( true, $enqueue( $first ), 'A waiting job entered during cooldown' );
+        expect( true, $enqueue( $second ), 'Another page is available for the cron runner' );
+        $state = $read();
+        $state['recent'] = [];
+        $write( $state );
+        for ( $visitor = 0; $visitor < 12; ++$visitor ) {
+            expect( false, $enqueue( $first ), 'Repeated visits keep a single pending job' );
+        }
+        expect( false, $enqueue( $second ), 'Concurrent visitors cannot reserve another worker on a different page' );
+        expect( $beforeShutdown + 1, $shutdown_registrations, 'One post-response callback is reserved after cooldown' );
+        expect( $beforeRequests, $requests, 'None of the waiting visitors performed synchronous HTTP' );
+        $expected_timeout = 3;
+        $expected_paths = [ $first ];
+        YSCachePixelWarm::finishAndRun();
+        expect( $beforeRequests + 1, $requests, 'The returning visitor completes the page after sending the response' );
+        expect( false, $enqueue( $first ), 'A later visitor immediately finds the fresh artifact' );
+        expect( false, $enqueue( $second ), 'The next waiting page does not use a second visitor worker during the lease' );
+        expect( $beforeShutdown + 1, $shutdown_registrations, 'The single-worker lease persists after completion' );
+        $expected_timeout = 8;
+        $expected_paths = [ $second ];
+        $tick();
+        expect( [], $read()['queue'], 'Cron remains able to drain the backlog during the visitor lease' );
         echo "Pixel warm scope, signed transport, bounded rate-limited cron queue, and sterile storage guards passed.\n";
     } finally {
         $entries = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ),
