@@ -35,6 +35,7 @@ $sections = [
     ] ],
     'help' => [ __( 'Help', 'ys-cache' ), 'book-alt', [
         'connections' => __( 'Connection setup', 'ys-cache' ),
+        'exclusion-guide' => __( 'Exclusion guide', 'ys-cache' ),
         'import' => __( 'Automatic import', 'ys-cache' ),
     ] ],
 ];
@@ -231,13 +232,20 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <p class="description"><?php
                     echo esc_html( sprintf(
                         /* translators: %s: list of active form plugins. */
-                        __( 'Detected form plugins (%s). Pages with supported forms are automatically excluded.', 'ys-cache' ),
+                        __( 'Detected form plugins (%s). Form pages are excluded by default.', 'ys-cache' ),
                         implode( wp_get_list_item_separator(), $forms )
                     ) );
                 ?></p>
             <?php endif; ?>
             <h3><?php esc_html_e( 'Manual exclusions', 'ys-cache' ); ?></h3>
             <p class="description"><?php esc_html_e( 'Enter one rule per line. Path rules support * wildcards. Cookie rules match name prefixes, and User-Agent rules match substrings.', 'ys-cache' ); ?></p>
+            <p class="description"><?php
+                printf(
+                    /* translators: %s: example URL path. */
+                    esc_html__( 'For a path rule, copy only the path from the public URL, such as %s. Keep the language prefix and any public subdirectory. Leave out the domain, query string, and fragment.', 'ys-cache' ),
+                    '<code>/en/contact/</code>'
+                );
+            ?></p>
             <div class="ys-cache-grid">
                 <?php foreach ( [ 'exclude_paths' => [ __( 'Paths', 'ys-cache' ), '/members/*' ], 'exclude_cookies' => [ 'Cookie', 'private_session_' ], 'exclude_agents' => [ 'User-Agent', 'ExampleBot' ] ] as $key => [ $label, $example ] ) : ?>
                     <label><?php echo esc_html( $label ); ?>
@@ -245,6 +253,18 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                     </label>
                 <?php endforeach; ?>
             </div>
+            <h3><?php esc_html_e( 'Path lifetime and form caching', 'ys-cache' ); ?></h3>
+            <div class="ys-cache-grid">
+                <label><?php esc_html_e( 'Shorter HTML lifetime by path', 'ys-cache' ); ?>
+                    <textarea name="ttl_paths" rows="4" maxlength="12000" placeholder="/news/* 300" aria-describedby="ys-cache-ttl-paths-help"><?php echo esc_textarea( $settings['ttl_paths'] ); ?></textarea>
+                    <span class="description" id="ys-cache-ttl-paths-help"><?php esc_html_e( 'Enter a path and seconds per line. The shortest matching lifetime applies to eligible HTML.', 'ys-cache' ); ?></span>
+                </label>
+                <label><?php esc_html_e( 'Public Contact Form 7 paths (Beta)', 'ys-cache' ); ?>
+                    <textarea name="public_cf7_paths" rows="4" maxlength="12000" placeholder="/en/contact/" aria-describedby="ys-cache-cf7-help"><?php echo esc_textarea( $settings['public_cf7_paths'] ); ?></textarea>
+                    <span class="description" id="ys-cache-cf7-help"><?php esc_html_e( 'Enter one path per line. Eligible public Contact Form 7 forms use local YS CACHE HTML for up to 300 seconds.', 'ys-cache' ); ?></span>
+                </label>
+            </div>
+            <p class="description"><?php esc_html_e( 'Forms with visitor-specific data, payments, CAPTCHA, or unsupported fields bypass the cache. WPForms, Fluent Forms and JetFormBuilder remain excluded.', 'ys-cache' ); ?></p>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="opcache" id="ys-cache-panel-opcache" aria-labelledby="ys-cache-tab-opcache" hidden>
             <h2>OPcache</h2>
@@ -407,6 +427,60 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
             <h3>Gcore</h3>
             <p><?php esc_html_e( 'In the Gcore Customer Portal, open Profile → API tokens → Create token. Select a role that can read CDN resources and purge their cache. Copy the token from the creation dialog and paste it into the Gcore layer.', 'ys-cache' ); ?></p>
             <p><a href="https://docs.gcore.com/developer-tools/rest-api/authentication"><?php esc_html_e( 'Gcore API token instructions', 'ys-cache' ); ?></a></p>
+        </section>
+        <section class="ys-cache-card" role="tabpanel" data-tab-panel="exclusion-guide" id="ys-cache-panel-exclusion-guide" aria-labelledby="ys-cache-tab-exclusion-guide" hidden>
+            <h2><?php esc_html_e( 'Exclusion guide', 'ys-cache' ); ?></h2>
+            <p><?php esc_html_e( 'Enter one rule per line in Cache settings → Exclusions.', 'ys-cache' ); ?></p>
+            <h3><?php esc_html_e( 'Paths', 'ys-cache' ); ?></h3>
+            <p><?php
+                printf(
+                    /* translators: %1$s: example public URL. %2$s: its URL path. */
+                    esc_html__( 'Copy the path starting with a slash. Include the language prefix and any public subdirectory. Leave out the domain, query string, and fragment. For %1$s, enter %2$s.', 'ys-cache' ),
+                    '<code>https://example.com/site/en/contact/?source=email#form</code>',
+                    '<code>/site/en/contact/</code>'
+                );
+            ?></p>
+            <ul>
+                <li><?php
+                    printf(
+                        /* translators: %1$s and %2$s: exact path without and with its final slash. */
+                        esc_html__( 'The exact rule %1$s matches %1$s and %2$s. A rule entered with the final slash matches the slash version.', 'ys-cache' ),
+                        '<code>/en/contact</code>',
+                        '<code>/en/contact/</code>'
+                    );
+                ?></li>
+                <li><?php
+                    printf(
+                        /* translators: %1$s: wildcard path rule. %2$s: base path. %3$s: example nested path. */
+                        esc_html__( 'Use %1$s to exclude %2$s and its nested pages, such as %3$s.', 'ys-cache' ),
+                        '<code>/members/*</code>',
+                        '<code>/members/</code>',
+                        '<code>/members/profile/</code>'
+                    );
+                ?></li>
+            </ul>
+            <h3>Cookie</h3>
+            <p><?php
+                printf(
+                    /* translators: %1$s: cookie name prefix. %2$s: example cookie name. */
+                    esc_html__( 'Enter a cookie name prefix. For example, %1$s matches the cookie named %2$s.', 'ys-cache' ),
+                    '<code>private_session_</code>',
+                    '<code>private_session_123</code>'
+                );
+            ?></p>
+            <h3>User-Agent</h3>
+            <p><?php
+                printf(
+                    /* translators: %1$s: substring rule. %2$s: example User-Agent value. */
+                    esc_html__( 'Enter a part of the User-Agent header. For example, %1$s matches %2$s.', 'ys-cache' ),
+                    '<code>ExampleBot</code>',
+                    '<code>ExampleBot/1.0</code>'
+                );
+            ?></p>
+            <h3><?php esc_html_e( 'Check a front-end cache hit', 'ys-cache' ); ?></h3>
+            <p><?php esc_html_e( 'In a private browser window, open Developer Tools → Network and reload the page twice. Select the main document and check X-YS-Cache in Response Headers. HIT means YS CACHE served HTML. X-FastCGI-Cache describes the server cache separately.', 'ys-cache' ); ?></p>
+            <h3><?php esc_html_e( 'Load a form separately', 'ys-cache' ); ?></h3>
+            <p><?php esc_html_e( 'Place the form on a separate page on this site, add its path under Paths, then embed that page in an iframe on the public page. The form loads with its own scripts and visitor state.', 'ys-cache' ); ?></p>
         </section>
         <section class="ys-cache-card" role="tabpanel" data-tab-panel="import" id="ys-cache-panel-import" aria-labelledby="ys-cache-tab-import" hidden>
             <h2><?php esc_html_e( 'Automatic import', 'ys-cache' ); ?></h2>

@@ -7,7 +7,7 @@ defined( 'ABSPATH' ) || exit;
 final class YSCacheInvalidation {
     private const SHARED_POST_TYPES = [
         'attachment', 'custom_css', 'nav_menu_item', 'product_variation',
-        'wp_block', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part',
+        'wp_block', 'wp_global_styles', 'wp_navigation', 'wp_template', 'wp_template_part', 'wpcf7_contact_form',
     ];
     private const PRODUCT_PRICES = [ '_regular_price', '_sale_price', '_price' ];
     private const RENDERED_POST_META = [
@@ -19,7 +19,7 @@ final class YSCacheInvalidation {
         'blogdescription', 'blogname', 'category_base', 'date_format', 'home',
         'page_for_posts', 'page_on_front', 'permalink_structure', 'posts_per_page',
         'show_on_front', 'sidebars_widgets', 'site_icon', 'siteurl', 'sticky_posts', 'tag_base',
-        'time_format', 'timezone_string', 'gmt_offset', 'WPLANG',
+        'time_format', 'timezone_string', 'gmt_offset', 'WPLANG', 'wpcf7',
     ];
 
     private \Closure $invalidate;
@@ -72,7 +72,7 @@ final class YSCacheInvalidation {
             'switch_theme', 'customize_save_after', 'wp_update_nav_menu', 'wp_update_nav_menu_item',
             'wp_delete_nav_menu', 'activated_plugin', 'deactivated_plugin', 'upgrader_process_complete',
             'ys_tp_settings_saved', 'trp_save_editor_translations_regular_strings',
-            'trp_save_editor_translations_gettext_strings', 'ys_cache_content_changed',
+            'trp_save_editor_translations_gettext_strings', 'ys_cache_content_changed', 'wpcf7_after_save',
             'ys_ec_product_deleted', 'ys_ec_product_auto_published',
             'ys_ec_product_auto_unpublished', 'ys_ec_category_saved', 'ys_ec_category_deleted',
         ] as $hook ) {

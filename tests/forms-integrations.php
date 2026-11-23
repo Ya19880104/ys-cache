@@ -143,6 +143,79 @@ foreach ( [
     expect_same( true, YSCacheIntegrations::cacheableHtml( $html ), 'Public markup ' . $html );
 }
 
+final class WPCF7_ContactForm {
+    public static string $option = '';
+    public static string $type = 'text';
+    public static bool $membersOnly = false;
+
+    public static function get_instance( int $id ): ?self { return $id === 8 ? new self() : null; }
+    public function is_true( string $name ): bool { return $name === 'subscribers_only' && self::$membersOnly; }
+    public function in_demo_mode(): bool { return false; }
+    public function scan_form_tags(): array {
+        return [ new class( self::$type ) {
+            public function __construct( public string $basetype ) {}
+            public function has_option( string $name ): bool { return $name === WPCF7_ContactForm::$option; }
+        } ];
+    }
+}
+
+$_SERVER['REQUEST_URI'] = '/en/contact/';
+$unitTag = 'wpcf7-f8-p12-o1';
+$publicForm = '<form class="wpcf7-form init" method="post" action="/en/contact/#' . $unitTag . '" data-status="init">';
+foreach ( [ '_wpcf7' => '8', '_wpcf7_version' => WPCF7_VERSION, '_wpcf7_locale' => 'en_US', '_wpcf7_unit_tag' => $unitTag,
+    '_wpcf7_container_post' => '12', '_wpcf7_posted_data_hash' => '' ] as $name => $value ) {
+    $publicForm .= '<input type="hidden" name="' . $name . '" value="' . $value . '">';
+}
+$publicForm .= '<input type="text" name="visitor-name"></form>';
+foreach ( [
+    'wpcf7_form_elements' => 'wpcf7_turnstile_prepend_widget',
+    'wpcf7_form_tag_data_option' => 'wpcf7_listo',
+    'wpcf7_form_hidden_fields' => 'wpcf7_recaptcha_add_hidden_fields',
+    'wpcf7_form_class_attr' => 'wpcf7_acceptance_form_class_attr',
+    'wpcf7_form_enctype' => 'wpcf7_file_form_enctype_filter',
+] as $hook => $nativeCallback ) {
+    $wp_filter[ $hook ] = (object) [ 'callbacks' => [ [ [ 'function' => $nativeCallback ] ] ] ];
+}
+expect_same( false, YSCacheIntegrations::cacheableHtml( $publicForm ), 'Public CF7 is opt-in' );
+expect_same( true, YSCacheIntegrations::cacheableHtml( $publicForm, true ), 'Plain public CF7 with verified hidden fields' );
+expect_same( false, YSCacheIntegrations::formContentRequiresBypass( '[contact-form-7 id="8"]', true ), 'Opt-in defers CF7 inspection until rendering' );
+expect_same( true, YSCacheIntegrations::formContentRequiresBypass( '[contact-form-7 id="8"][jet_fb_form form_id="4"]', true ), 'Opt-in protects mixed plugin shortcodes' );
+foreach ( [
+    str_replace( 'data-status="init"', 'data-status="sent"', $publicForm ),
+    str_replace( 'value=""', 'value="post-data"', $publicForm ),
+    str_replace( '/en/contact/#', '/other/#', $publicForm ),
+    str_replace( '</form>', '<input type="hidden" name="_wpnonce" value="nonce"></form>', $publicForm ),
+    str_replace( '</form>', '<input type="hidden" name="_wpcf7_recaptcha_response" value=""></form>', $publicForm ),
+    str_replace( '</form>', '<div class="cf-turnstile" data-sitekey="public"></div></form>', $publicForm ),
+    substr( $publicForm, 0, -7 ),
+    $publicForm . '<form class="wpforms-form"></form>',
+    $publicForm . '<form class="frm-fluent-form"></form>',
+    $publicForm . '<form class="jet-form-builder"></form>',
+    '<p class="wpcf7-subscribers-only">Login required</p>',
+] as $unsafeForm ) {
+    expect_same( false, YSCacheIntegrations::cacheableHtml( $unsafeForm, true ), 'A private, incomplete or mixed form remains excluded' );
+}
+WPCF7_ContactForm::$option = 'default';
+expect_same( false, YSCacheIntegrations::cacheableHtml( $publicForm, true ), 'Contextual default values bypass' );
+WPCF7_ContactForm::$option = '';
+WPCF7_ContactForm::$type = 'file';
+expect_same( false, YSCacheIntegrations::cacheableHtml( $publicForm, true ), 'Unapproved field types bypass' );
+WPCF7_ContactForm::$type = 'text';
+WPCF7_ContactForm::$membersOnly = true;
+expect_same( false, YSCacheIntegrations::cacheableHtml( $publicForm, true ), 'Members-only forms bypass' );
+WPCF7_ContactForm::$membersOnly = false;
+final class WPCF7_RECAPTCHA {
+    public static bool $enabled = false;
+    public static function get_instance(): self { return new self(); }
+    public function is_active(): bool { return self::$enabled; }
+}
+WPCF7_RECAPTCHA::$enabled = true;
+expect_same( false, YSCacheIntegrations::supportsPublicContactForms(), 'Enabling CAPTCHA also prevents existing cached pages from being read' );
+WPCF7_RECAPTCHA::$enabled = false;
+$wp_filter['wpcf7_form_elements'] = (object) [ 'callbacks' => [ [ [ 'function' => static fn ( $html ) => $html ] ] ] ];
+expect_same( false, YSCacheIntegrations::cacheableHtml( $publicForm, true ), 'Unknown form output hooks bypass' );
+unset( $wp_filter['wpcf7_form_elements'], $_SERVER['REQUEST_URI'] );
+
 expect_same( true, YSCacheIntegrations::allowsExternalHtml(), 'No TranslatePress installation' );
 class_alias( TestTranslatePress::class, 'TRP_Translate_Press' );
 class_alias( TestTranslatePressModuleSettings::class, 'YangSheep\TPAddons\Support\YSTPAddonsModules' );

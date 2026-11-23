@@ -185,8 +185,8 @@ msgstr "已偵測的應用程式整合"
 
 #: templates/admin/settings.php:202
 #, php-format
-msgid "Detected form plugins (%s). Pages with supported forms are automatically excluded."
-msgstr "已偵測表單外掛 %s。表單頁會套用自動排除。"
+msgid "Detected form plugins (%s). Form pages are excluded by default."
+msgstr "已偵測表單外掛 %s。表單頁預設排除快取。"
 
 #: src/YSCacheLiteSpeed.php:46 templates/admin/settings.php:382
 msgid "Disable LiteSpeed Guest Mode and forced cache rules before enabling the integration."
@@ -894,3 +894,57 @@ msgstr "CDN 清除在完成 %1$d／%2$d 個請求後停止。%3$s"
 
 msgid "Gcore did not confirm every requested purge path."
 msgstr "Gcore 未確認所有要求清除的路徑。"
+
+msgid "Exclusion guide"
+msgstr "排除規則指南"
+
+msgid "For a path rule, copy only the path from the public URL, such as %s. Keep the language prefix and any public subdirectory. Leave out the domain, query string, and fragment."
+msgstr "設定路徑排除時，只複製公開網址中的路徑，例如 %s。請保留語系前綴及公開子目錄，省略網域、查詢字串和片段。"
+
+msgid "Enter one rule per line in Cache settings → Exclusions."
+msgstr "在「快取設定 → 排除」中每行填寫一條規則。"
+
+msgid "Copy the path starting with a slash. Include the language prefix and any public subdirectory. Leave out the domain, query string, and fragment. For %1$s, enter %2$s."
+msgstr "複製從斜線開始的路徑，保留語系前綴及公開子目錄，省略網域、查詢字串和片段。網址 %1$s 應填寫為 %2$s。"
+
+msgid "The exact rule %1$s matches %1$s and %2$s. A rule entered with the final slash matches the slash version."
+msgstr "精確規則 %1$s 會比對 %1$s 與 %2$s。填寫規則時若保留結尾斜線，便會比對有斜線的版本。"
+
+msgid "Use %1$s to exclude %2$s and its nested pages, such as %3$s."
+msgstr "使用 %1$s 可排除 %2$s 及其下的頁面，例如 %3$s。"
+
+msgid "Enter a cookie name prefix. For example, %1$s matches the cookie named %2$s."
+msgstr "輸入 Cookie 名稱前綴。例如 %1$s 會比對名為 %2$s 的 Cookie。"
+
+msgid "Enter a part of the User-Agent header. For example, %1$s matches %2$s."
+msgstr "輸入 User-Agent 標頭中的一段文字。例如 %1$s 會比對 %2$s。"
+
+msgid "Path lifetime and form caching"
+msgstr "路徑時效與表單快取"
+
+msgid "Shorter HTML lifetime by path"
+msgstr "依路徑縮短 HTML 快取時效"
+
+msgid "Enter a path and seconds per line. The shortest matching lifetime applies to eligible HTML."
+msgstr "每行填入路徑與秒數。符合快取條件的 HTML 會使用命中規則中的最短時效。"
+
+msgid "Public Contact Form 7 paths (Beta)"
+msgstr "公開 Contact Form 7 路徑（Beta）"
+
+msgid "Enter one path per line. Eligible public Contact Form 7 forms use local YS CACHE HTML for up to 300 seconds."
+msgstr "每行填一個路徑。符合條件的公開 Contact Form 7 可使用 YS CACHE 本機 HTML 快取，最長 300 秒。"
+
+msgid "Forms with visitor-specific data, payments, CAPTCHA, or unsupported fields bypass the cache. WPForms, Fluent Forms and JetFormBuilder remain excluded."
+msgstr "含訪客專屬資料、付款、CAPTCHA 或不支援欄位的表單會繞過快取。WPForms、Fluent Forms 與 JetFormBuilder 仍套用排除。"
+
+msgid "Check a front-end cache hit"
+msgstr "檢查前台快取命中"
+
+msgid "In a private browser window, open Developer Tools → Network and reload the page twice. Select the main document and check X-YS-Cache in Response Headers. HIT means YS CACHE served HTML. X-FastCGI-Cache describes the server cache separately."
+msgstr "在瀏覽器的無痕視窗開啟「開發人員工具 → 網路」，重新載入兩次。選主文件，在「回應標頭」查看 X-YS-Cache。HIT 表示 YS CACHE 已從快取提供 HTML。X-FastCGI-Cache 顯示的是伺服器快取狀態。"
+
+msgid "Load a form separately"
+msgstr "獨立載入表單"
+
+msgid "Place the form on a separate page on this site, add its path under Paths, then embed that page in an iframe on the public page. The form loads with its own scripts and visitor state."
+msgstr "將表單放在本站的獨立頁面，把該頁網址加到「路徑」，再用 iframe 嵌入公開頁面。表單會獨立載入所需的腳本與訪客狀態。"

@@ -38,6 +38,8 @@ final class YSCacheSettingsRepo {
             'exclude_paths'   => '',
             'exclude_cookies' => '',
             'exclude_agents'  => '',
+            'ttl_paths'       => '',
+            'public_cf7_paths' => '',
             'providers'       => [],
             'assets'          => [],
         ];

@@ -59,7 +59,7 @@ final class YSCacheIntegrations {
 			&& class_exists( '\YangSheep\TPAddons\Support\YSTPAddonsModules' );
 	}
 
-	public static function bypass(): bool {
+	public static function bypass( bool $localContactForm = false ): bool {
 		// YS CART localizes this header's value into storefront scripts during an HTML render.
 		if ( ! empty( $_SERVER['HTTP_X_YS_GUEST_TOKEN'] )
 			|| ! empty( $_SERVER['HTTP_X_WP_NONCE'] ) || ! empty( $_SERVER['HTTP_CART_TOKEN'] ) ) {
@@ -83,7 +83,7 @@ final class YSCacheIntegrations {
 		}
 
 		$post = get_queried_object();
-		if ( $post instanceof \WP_Post && self::formContentRequiresBypass( $post->post_content ) ) {
+		if ( $post instanceof \WP_Post && self::formContentRequiresBypass( $post->post_content, $localContactForm ) ) {
 			return true;
 		}
 
@@ -145,13 +145,13 @@ final class YSCacheIntegrations {
 	}
 
 	/** Check a post's own content without running shortcodes or fetching associated records. */
-	public static function formContentRequiresBypass( string $content ): bool {
+	public static function formContentRequiresBypass( string $content, bool $localContactForm = false ): bool {
 		if ( ! str_contains( $content, '[' ) && ! str_contains( $content, '<!--' ) ) {
 			return false;
 		}
 
-		foreach ( self::FORM_PLUGINS as $plugin ) {
-			if ( ! defined( $plugin['version'] ) ) {
+		foreach ( self::FORM_PLUGINS as $slug => $plugin ) {
+			if ( ! defined( $plugin['version'] ) || ( $localContactForm && $slug === 'contact-form-7' ) ) {
 				continue;
 			}
 
@@ -165,11 +165,11 @@ final class YSCacheIntegrations {
 		return false;
 	}
 
-	private static function hasRenderedDynamicForm( string $html ): bool {
+	private static function hasRenderedDynamicForm( string $html, bool $localContactForm ): bool {
 		$form_classes = [];
 		$form_fields = [];
-		foreach ( self::FORM_PLUGINS as $plugin ) {
-			if ( ! defined( $plugin['version'] ) ) {
+		foreach ( self::FORM_PLUGINS as $slug => $plugin ) {
+			if ( ! defined( $plugin['version'] ) || ( $localContactForm && $slug === 'contact-form-7' ) ) {
 				continue;
 			}
 
@@ -210,6 +210,116 @@ final class YSCacheIntegrations {
 		}
 
 		return false;
+	}
+
+	public static function supportsPublicContactForms(): bool {
+		if ( ! defined( 'WPCF7_VERSION' ) || ! is_callable( [ '\WPCF7_ContactForm', 'get_instance' ] ) ||
+			preg_match( '/\A6\.2(?:\.[0-9]+)?\z/', WPCF7_VERSION ) !== 1 ) {
+			return false;
+		}
+		foreach ( [ '\WPCF7_RECAPTCHA', '\WPCF7_Turnstile' ] as $service ) {
+			if ( is_callable( [ $service, 'get_instance' ] ) && $service::get_instance()->is_active() ) {
+				return false;
+			}
+		}
+
+		global $wp_filter;
+		$trusted = [
+			'wpcf7_form_elements' => [ 'wpcf7_turnstile_prepend_widget' ],
+			'wpcf7_form_tag_data_option' => [ 'wpcf7_listo' ],
+			'wpcf7_form_hidden_fields' => [ 'wpcf7_recaptcha_add_hidden_fields' ],
+			'wpcf7_form_class_attr' => [ 'wpcf7_acceptance_form_class_attr' ],
+			'wpcf7_form_enctype' => [ 'wpcf7_file_form_enctype_filter' ],
+			'wpcf7_form_tag' => [], 'wpcf7_form_action_url' => [], 'wpcf7_form_additional_atts' => [],
+			'wpcf7_form_id_attr' => [], 'wpcf7_form_name_attr' => [], 'wpcf7_form_title_attr' => [],
+			'wpcf7_form_autocomplete' => [], 'wpcf7_form_response_output' => [],
+			'wpcf7_contact_form_properties' => [], 'wpcf7_contact_form_property_form' => [], 'wpcf7_form_tag_date_option' => [],
+		];
+		foreach ( $trusted as $hook => $functions ) {
+			foreach ( $wp_filter[ $hook ]->callbacks ?? [] as $callbacks ) {
+				foreach ( $callbacks as $callback ) {
+					if ( ! in_array( $callback['function'], $functions, true ) ) {
+						return false;
+					}
+				}
+			}
+		}
+		return true;
+	}
+
+	private static function hasPrivateContactForms( string $html ): bool {
+		if ( stripos( $html, 'wpcf7' ) === false ) {
+			return false;
+		}
+		$tags = new \WP_HTML_Tag_Processor( $html );
+		$hidden = null;
+		$unitTag = '';
+		$expected = [ '_wpcf7', '_wpcf7_version', '_wpcf7_locale', '_wpcf7_unit_tag', '_wpcf7_container_post', '_wpcf7_posted_data_hash' ];
+		while ( $tags->next_tag( [ 'tag_closers' => 'visit' ] ) ) {
+			$tag = $tags->get_tag();
+			if ( $tags->has_class( 'wpcf7-subscribers-only' ) ) {
+				return true;
+			}
+			if ( $tag === 'FORM' ) {
+				if ( $tags->is_tag_closer() ) {
+					if ( $hidden !== null && ! self::verifiedContactForm( $hidden, $expected, $unitTag ) ) {
+						return true;
+					}
+					$hidden = null;
+				} elseif ( $hidden !== null ) {
+					return true;
+				} elseif ( $tags->has_class( 'wpcf7-form' ) ) {
+					$action = $tags->get_attribute( 'action' );
+					$request = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
+					if ( $tags->get_attribute( 'data-status' ) !== 'init' || $tags->get_attribute( 'method' ) !== 'post' ||
+						! is_string( $action ) || ! str_starts_with( $action, $request . '#wpcf7-' ) ) {
+						return true;
+					}
+					$hidden = [];
+					$unitTag = substr( $action, strlen( $request ) + 1 );
+				}
+			} elseif ( $tag === 'INPUT' ) {
+				$name = $tags->get_attribute( 'name' );
+				$type = strtolower( (string) $tags->get_attribute( 'type' ) );
+				if ( $hidden === null ) {
+					if ( $name === '_wpcf7' ) {
+						return true;
+					}
+				} elseif ( $type === 'hidden' ) {
+					$value = $tags->get_attribute( 'value' );
+					if ( ! in_array( $name, $expected, true ) || ! is_string( $value ) || isset( $hidden[ $name ] ) ) {
+						return true;
+					}
+					$hidden[ $name ] = $value;
+				} elseif ( in_array( $type, [ 'file', 'password' ], true ) ) {
+					return true;
+				}
+			} elseif ( $hidden !== null && ( $tags->has_class( 'cf-turnstile' ) || $tags->has_class( 'wpcf7-turnstile' ) ||
+				$tags->get_attribute( 'data-sitekey' ) !== null ) ) {
+				return true;
+			}
+		}
+		return $hidden !== null;
+	}
+
+	private static function verifiedContactForm( array $hidden, array $expected, string $unitTag ): bool {
+		if ( count( $hidden ) !== count( $expected ) || $hidden['_wpcf7_version'] !== WPCF7_VERSION ||
+			$hidden['_wpcf7_posted_data_hash'] !== '' || ! preg_match( '/\A[1-9][0-9]{0,10}\z/', $hidden['_wpcf7'] ) ||
+			$hidden['_wpcf7_unit_tag'] !== $unitTag || ! preg_match( '/\Awpcf7-f' . $hidden['_wpcf7'] . '(?:-p[0-9]+)?-o[0-9]+\z/', $unitTag ) ) {
+			return false;
+		}
+		$form = \WPCF7_ContactForm::get_instance( (int) $hidden['_wpcf7'] );
+		if ( ! $form || $form->is_true( 'subscribers_only' ) || $form->in_demo_mode() ) {
+			return false;
+		}
+		$fields = $form->scan_form_tags();
+		foreach ( $fields as $field ) {
+			if ( ! in_array( $field->basetype, [ 'text', 'email', 'url', 'tel', 'textarea', 'number', 'range', 'date', 'select', 'checkbox', 'radio', 'acceptance', 'submit' ], true ) ||
+				$field->has_option( 'default' ) || $field->has_option( 'data' ) ) {
+				return false;
+			}
+		}
+		return $fields !== [];
 	}
 
 	/** A per-URL shared cache cannot distinguish language detection by browser or IP. */
@@ -345,8 +455,10 @@ final class YSCacheIntegrations {
 		return false;
 	}
 
-	public static function cacheableHtml( string $html ): bool {
-		if ( preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) || self::hasRenderedDynamicForm( $html ) ) {
+	public static function cacheableHtml( string $html, bool $localContactForm = false ): bool {
+		$localContactForm = $localContactForm && self::supportsPublicContactForms();
+		if ( preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) || self::hasRenderedDynamicForm( $html, $localContactForm ) ||
+			( $localContactForm && self::hasPrivateContactForms( $html ) ) ) {
 			return false;
 		}
 

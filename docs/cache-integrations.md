@@ -40,9 +40,35 @@ Under **CDN Layers → Website alias hostnames**, enter the alternate domains th
 1. Sign in to the Gcore Customer Portal. Open the avatar menu and select **Profile → API tokens → Create token**. Set a name and expiry, grant the CDN permissions needed to read resources and purge cache, and copy the token while it is displayed.
 2. In WordPress, select **Gcore**, enter a hostname already attached to the CDN resource, and paste the token into **API token / key**. Use **Find resource ID** to find the matching resource, then enable API purging and save. [Gcore API tokens](https://docs.gcore.com/account-settings/api-tokens)
 
+## Path rules and shorter lifetimes
+
+Open **Cache settings → Exclusions**. Enter one rule per line. Copy the public URL path starting with `/`, including any language prefix and public subdirectory. For `https://example.com/site/en/contact/?source=email#form`, enter `/site/en/contact/`. Omitting the final slash from a literal rule such as `/en/contact` matches both `/en/contact` and `/en/contact/`. A literal ending in `/` matches the slash version. `/members/*` matches the members page and paths under it. Cookie rules match names by prefix, so `private_session_` matches `private_session_123`. User-Agent rules match a substring, so `ExampleBot` matches `ExampleBot/1.0`.
+
+The global HTML lifetime can be set to seven days. In the shorter-lifetime field, enter a path rule followed by a space and a positive whole number of seconds. For example, `/news/* 300` caps eligible news pages at 300 seconds. If `/news/latest/ 60` also matches, YS CACHE uses the shortest matching duration or the global lifetime, whichever is lower. HTML eligibility and nonce checks still apply. Any server or CDN copy already stored can keep its own lifetime. Check and purge each cache layer if you need an immediate change.
+
+To check the result, make two anonymous GET requests to the same URL with no query string. A fresh eligible local page typically returns `X-YS-Cache: MISS` and then `X-YS-Cache: HIT`. A form page excluded by the plugin typically returns `X-YS-Cache: BYPASS` when WordPress handles the request. An upstream response can replay an origin header, so check the upstream status separately. An Nginx cache can report `X-FastCGI-Cache: HIT` when configured to send that header.
+
 ## Forms and lifetime
 
-WPForms, Fluent Forms, JetFormBuilder and Contact Form 7 are detected automatically. The plugin examines the current page’s blocks and shortcodes and checks rendered HTML for form markup and private tokens. A footer or builder template with a form affects every page where the form is rendered. Check both a form page and an ordinary page with anonymous requests. Extending the configured lifetime to seven days still respects the active nonce window and eligible responses.
+YS CACHE checks the current page’s shortcodes and blocks and inspects the rendered output. A form in a shared footer or builder template can affect every page where it appears. WPForms, Fluent Forms, and JetFormBuilder default to bypass because rendered forms can include expiring tokens, session data, dynamic fields, and payment or validation state. Contact Form 7 normally bypasses too. [WPForms cache and form tokens](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms payments and caching](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
+
+### Simple public Contact Form 7 pages (Beta)
+
+Add the public page paths to **Public Contact Form 7 paths (Beta)** to opt in. Use this with the local YS CACHE HTML mode on Contact Form 7 6.2.x for simple guest forms. Add each translated URL you intend to cache. Eligible pages expire after at most 300 seconds, with shorter path or global limits taking precedence. Use server and CDN bypass rules for these form paths.
+
+Keep forms with payments, CAPTCHA, prefilled or private fields, login requirements, uploads, or custom form hooks on the bypass path. YS CACHE also bypasses the page when it detects another dynamic form or sensitive output. Keep the form’s protection and submission settings in place. Confirm the anonymous page renders and submit a test entry on a test host before using the option on a live site. [Contact Form 7 shortcode setup](https://contactform7.com/faq/)
+
+### Keep one embedded form dynamic
+
+1. Create a separate WordPress page on the same site, such as `/contact-form/`, and insert the form plugin’s standard shortcode there. The form page renders through the plugin and keeps its normal validation and submission logic.
+2. Exclude that page in YS CACHE and in every server or CDN layer that caches HTML. Keep any translated form URLs excluded too.
+3. Insert a same-origin iframe on the containing page, using its editor or builder’s supported embed feature. The containing page can still be cached if it is otherwise eligible.
+
+```html
+<iframe src="/contact-form/" title="Contact form" loading="lazy" height="640"></iframe>
+```
+
+Confirm that the site’s framing policy allows same-origin embeds. Check the containing page’s cache status and the form page’s bypass separately, then submit a test entry in the iframe on the test host. Repeat for each published language and verify the validation and confirmation states.
 
 ## Background clearing and inventory
 
@@ -90,9 +116,35 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 1. 登入 Gcore Customer Portal，從頭像選單開啟 **Profile → API tokens → Create token**。設定名稱和效期，授予讀取 CDN 資源與清除快取所需權限，並在畫面顯示時複製 Token。
 2. 回到 WordPress 的「CDN 層」，選擇 **Gcore**，填入已綁定 CDN 資源的主機名稱及 Token。按「查詢資源 ID」配對資源，再啟用 API 清除並儲存。 [Gcore API Token](https://docs.gcore.com/account-settings/api-tokens)
 
+### 路徑規則與縮短快取效期
+
+開啟「快取設定 → 排除」，每行填寫一條規則。只複製公開網址中從 `/` 開始的路徑，保留語系前綴及公開子目錄。`https://example.com/site/en/contact/?source=email#form` 應填寫為 `/site/en/contact/`。精確規則 `/en/contact` 會比對有無結尾斜線的兩種網址，填成 `/en/contact/` 則會比對有斜線的版本。`/members/*` 會比對會員頁及其子路徑。Cookie 規則依名稱前綴比對，例如 `private_session_` 會比對 `private_session_123`。User-Agent 規則比對其中一段文字，例如 `ExampleBot` 會比對 `ExampleBot/1.0`。
+
+全站 HTML 效期最長可設為七天。在縮短效期欄位，每行輸入一個路徑規則、空白及正整數秒數。例如 `/news/* 300` 將符合快取條件的新聞頁限制在 300 秒內。若同時符合 `/news/latest/ 60`，YS CACHE 會從符合的規則及全站效期中取最短值。HTML 適用條件與 nonce 效期仍然生效。伺服器或 CDN 已存入的快取可能有各自的效期。若需立即套用，請逐層檢查並清除。
+
+使用未登入且不帶查詢字串的訪客請求，連續兩次讀取同一個網址。可快取且尚未建立本機快取的頁面通常會先顯示 `X-YS-Cache: MISS`，接著顯示 `X-YS-Cache: HIT`。由 WordPress 處理且被排除的表單頁通常顯示 `X-YS-Cache: BYPASS`。上游快取可能一併傳回原來的標頭，請另外檢查上游的狀態。若主機有提供相應標頭，Nginx 命中時可看到 `X-FastCGI-Cache: HIT`。
+
 ### 表單和快取效期
 
-外掛自動偵測 WPForms、Fluent Forms、JetFormBuilder 與 Contact Form 7。檢查只針對當前頁面的區塊、短代碼和輸出的表單標記或私有 Token。若頁尾或共用版型含表單，每個載入它的頁面都會套用排除。請以未登入訪客分別測試表單頁和一般頁面。時效可填到七天，實際可命中時間仍受 nonce 時段及回應條件限制。
+YS CACHE 會檢查當前頁面的短代碼、區塊及實際輸出。共用頁尾或版型含表單時，可能影響每個顯示表單的頁面。WPForms、Fluent Forms 和 JetFormBuilder 預設繞過快取，因為表單可能含會到期的權杖、工作階段資料、動態欄位或付款及驗證狀態。Contact Form 7 預設也會繞過。 [WPForms 快取與表單權杖](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms 付款及快取](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
+
+#### 簡單公開 Contact Form 7 頁面（Beta）
+
+在「公開 Contact Form 7 路徑（Beta）」填入要啟用的公開路徑。此選項適用於使用本機 YS CACHE HTML 的 Contact Form 7 6.2.x 簡單訪客表單。各語系網址需分別填寫。符合條件的頁面效期最長 300 秒，若路徑或全站效期較短，會採較短的值。請同時在伺服器及 CDN 排除這些表單網址。
+
+付款、CAPTCHA、預填或私人欄位、登入限制、檔案上傳及有自訂表單掛鉤的頁面維持排除。YS CACHE 若偵測到其他動態表單或敏感輸出，整頁也會繞過快取。請保留原本的表單防護及送出設定。上線前，請在測試站用訪客身分確認表單正常顯示並送出一筆測試資料。 [Contact Form 7 短代碼說明](https://contactform7.com/faq/)
+
+#### 讓單一內嵌表單維持即時渲染
+
+1. 在同一個 WordPress 網站建立獨立頁面，例如 `/contact-form/`，加入表單外掛原生短代碼。表單頁由外掛正常渲染，保留原本的驗證及送出流程。
+2. 在 YS CACHE 及各個會快取 HTML 的伺服器和 CDN 層排除表單頁。各語系的表單網址也要一起排除。
+3. 用外層頁面的編輯器或版型工具，加入支援的同源 iframe。外層頁面若符合其他快取條件，仍然可以快取。
+
+```html
+<iframe src="/contact-form/" title="聯絡表單" loading="lazy" height="640"></iframe>
+```
+
+先確認網站的框架政策允許同源內嵌，分別檢查外層頁面的快取狀態與表單頁的排除結果，再用 iframe 在測試站送出一筆測試資料。各語系都應驗證，並確認欄位檢查及送出後的提示。
 
 ### 背景清除與庫存
 

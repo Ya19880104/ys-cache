@@ -67,7 +67,8 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
             $native = str_starts_with( $this->path, '/native-' );
             $edge = str_starts_with( $this->path, '/edge' ) || $this->path === '/native-edge/';
             $local = $edge || str_starts_with( $this->path, '/local' ) || str_ends_with( $this->path, '-purge/' );
-            return json_encode( [ 'enabled' => true, 'ttl' => 3, 'auto_purge' => $this->path !== '/auto-off-purge/', 'exclude_paths' => '/protected/', 'providers' => [
+            return json_encode( [ 'enabled' => true, 'ttl' => 3, 'auto_purge' => $this->path !== '/auto-off-purge/', 'exclude_paths' => '/protected/',
+                'ttl_paths' => "/edge-short/* 9\n/edge-short 6\n/local-short 1\n/local-short 0", 'providers' => [
                 'enhance' => [ 'enabled' => ! $local && ! $native, 'delegate_html' => ! $local && ! $native, 'rules_verified' => $this->path !== '/unverified/' ],
                 'litespeed' => [ 'enabled' => $native, 'rules_verified' => $this->path !== '/native-unverified/' ],
                 'opcache' => [ 'enabled' => false ],
@@ -304,6 +305,12 @@ try {
         [ , $headers ] = request( $address, $path, $sent );
         check( str_contains( $headers['cache-control'] ?? '', 'no-store' ), true, 'Ineligible edge HTML remains private for ' . $path );
     }
+    [ , $headers ] = request( $address, '/edge-short/' );
+    check( preg_match( '/s-maxage=([1-6]),/', $headers['cache-control'] ?? '' ), 1, 'Shortest matching path lifetime caps eligible edge HTML' );
+    request( $address, '/local-short/' );
+    sleep( 1 );
+    [ , $headers ] = request( $address, '/local-short/' );
+    check( $headers['x-ys-cache'] ?? '', 'MISS', 'The local cache honors a shorter path lifetime' );
     [ $roundtrip ] = request( $address, '/settings-roundtrip-purge/', [], 'POST' );
     check( json_decode( $roundtrip, true ), [ 'saved' => true, 'ttl_seconds' => 61, 'ttl_unit' => 'min', 'auto_purge' => false ], 'Store an exact lifetime, display unit, and master auto purge choice' );
     [ , $headers ] = request( $address, '/native-stale-generation/' );

@@ -184,6 +184,8 @@
                 exclude_paths: field('exclude_paths'),
                 exclude_cookies: field('exclude_cookies'),
                 exclude_agents: field('exclude_agents'),
+                ttl_paths: field('ttl_paths'),
+                public_cf7_paths: field('public_cf7_paths'),
                 assets: {
                     css_minify: field('css_minify'),
                     js_minify: field('js_minify'),

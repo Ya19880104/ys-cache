@@ -113,6 +113,8 @@ final class YSCache {
             'exclude_paths'   => self::lines( $settings['exclude_paths'] ),
             'exclude_cookies' => self::lines( $settings['exclude_cookies'] ),
             'exclude_agents'  => self::lines( $settings['exclude_agents'] ),
+            'ttl_paths'       => self::lines( $settings['ttl_paths'] ),
+            'public_cf7_paths' => self::lines( $settings['public_cf7_paths'] ),
             'assets'          => YSCacheAssetOptimization::sanitize( (array) $settings['assets'] ),
             'providers'       => YSCacheProviders::sanitize(
                 is_array( $settings['providers'] ) ? $settings['providers'] : [],
@@ -472,7 +474,18 @@ final class YSCache {
         return false;
     }
 
-    private static function cachePath( array $settings ): ?string {
+    private static function pathLifetime( int $lifetime, string $rules, string $path ): int {
+        $decoded = rawurldecode( $path );
+        foreach ( preg_split( '/\R/', $rules, -1, PREG_SPLIT_NO_EMPTY ) as $line ) {
+            if ( preg_match( '~\A(/[^\s?#\\\\]*)\s+([1-9][0-9]{0,5})\z~', trim( $line ), $parts ) &&
+                ( self::match( $parts[1], $path, 'path' ) || self::match( $parts[1], $decoded, 'path' ) ) ) {
+                $lifetime = min( $lifetime, (int) $parts[2] );
+            }
+        }
+        return $lifetime;
+    }
+
+    private static function cachePath( array $settings, bool &$localContactForm ): ?string {
         $uri = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
         $method = $_SERVER['REQUEST_METHOD'] ?? '';
         if ( ! in_array( $method, [ 'GET', 'HEAD' ], true ) || empty( $uri ) || strlen( $uri ) > 2048 ||
@@ -511,8 +524,11 @@ final class YSCache {
             return null;
         }
 
+        $paths = $settings['public_cf7_paths'];
+        $localContactForm = $paths !== '' && self::usesLocalHtml( $settings ) && YSCacheIntegrations::supportsPublicContactForms() &&
+            ( self::match( $paths, $uri, 'path' ) || self::match( $paths, $decoded, 'path' ) );
         if ( ! self::hasCanonicalAuthority() ||
-            YSCacheIntegrations::bypass() || ! apply_filters( 'ys_cache_allow_request', true, $uri ) ) {
+            YSCacheIntegrations::bypass( $localContactForm ) || ! apply_filters( 'ys_cache_allow_request', true, $uri ) ) {
             return null;
         }
         return $uri;
@@ -579,7 +595,8 @@ final class YSCache {
         }
 
         $this->frontendTemplate = true;
-        $path = self::cachePath( $settings );
+        $localContactForm = false;
+        $path = self::cachePath( $settings, $localContactForm );
         if ( $path === null || $this->privateResponse || is_user_logged_in() || is_404() || is_search() ||
             ( is_singular() && post_password_required() ) ) {
             $this->excludeLiteSpeedResponse();
@@ -587,6 +604,11 @@ final class YSCache {
             return $template;
         }
 
+        $settings['ttl_seconds'] = self::pathLifetime( $settings['ttl_seconds'], $settings['ttl_paths'], $path );
+        if ( $localContactForm ) {
+            $settings['ttl_seconds'] = min( $settings['ttl_seconds'], 300 );
+            $this->edgeHtml = false;
+        }
         $delegated = self::delegatesHtml( $settings );
         $local = self::usesLocalHtml( $settings );
         $externalLanguageSafe = ( $delegated || $this->edgeHtml || $this->liteSpeedHtml ) && YSCacheIntegrations::allowsExternalHtml();
@@ -637,6 +659,7 @@ final class YSCache {
         $key = hash( 'sha256', implode( "\n", [
             YS_CACHE_VERSION, home_url(), is_ssl() ? 'https' : 'http', $path, determine_locale(), $language, $nonce,
             implode( ':', $this->requestPageGenerations ), hash( 'sha256', serialize( $settings ) ),
+            $localContactForm ? (string) WPCF7_VERSION : '',
         ] ) );
         $remaining = null;
         $html = YSCacheStorage::read( $directory, $key, $settings['ttl_seconds'], $remaining );
@@ -653,18 +676,18 @@ final class YSCache {
             return $template;
         }
         header( 'X-YS-Cache: MISS', true );
-        $this->captureHtml( $settings, $nonce, $directory, $key );
+        $this->captureHtml( $settings, $nonce, $directory, $key, false, $localContactForm );
         return $template;
     }
 
-    private function captureHtml( array $settings, string $nonce, ?string $directory, ?string $key, bool $fastcgi = false ): void {
+    private function captureHtml( array $settings, string $nonce, ?string $directory, ?string $key, bool $fastcgi = false, bool $localContactForm = false ): void {
         if ( ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' ) {
             return;
         }
         $baseline = $this->htmlResponseHeaders();
         $shared = $fastcgi || $this->edgeHtml ? $this->sharedHtmlState( $nonce, $settings['ttl_seconds'], $fastcgi ) : null;
         $complete = true;
-        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared ): string {
+        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm ): string {
             if ( !( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
                 $complete = false;
                 return $html;
@@ -675,8 +698,11 @@ final class YSCache {
                 $this->htmlResponseHeaders() !== $baseline || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ||
                 ! self::isCompleteHtml( $html ) ||
                 preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) ||
-                ! YSCacheIntegrations::cacheableHtml( $html ) ||
+                ! YSCacheIntegrations::cacheableHtml( $html, $localContactForm ) ||
                 ! apply_filters( 'ys_cache_allow_html', true, $html ) ) {
+                if ( $directory !== null && ! headers_sent() ) {
+                    header( 'X-YS-Cache: BYPASS', true );
+                }
                 return $responseHtml;
             }
 

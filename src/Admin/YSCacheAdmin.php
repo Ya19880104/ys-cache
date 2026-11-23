@@ -120,16 +120,18 @@ final class YSCacheAdmin {
         }
         $cdnChanged = ( $candidate['alias_hosts'] ?? [] ) !== ( $before['providers']['alias_hosts'] ?? [] ) ||
             $candidate['cdn'] !== ( $before['providers']['cdn'] ?? [] );
+        $requestRules = array_flip( [ 'enabled', 'ttl_seconds', 'ttl_paths', 'public_cf7_paths', 'exclude_paths', 'exclude_cookies', 'exclude_agents' ] );
+        $rulesChanged = array_intersect_key( $saved, $requestRules ) !== array_intersect_key( $before, $requestRules );
         $results = $wasDelegated && ( ! $delegated ||
             YSCacheEnhanceIntegration::fingerprint( $beforeEnhance ) !==
             YSCacheEnhanceIntegration::fingerprint( $candidate['enhance'] ) )
             ? YSCacheProviders::purge( $before['providers'], 'enhance' ) : [];
-        if ( ( $delegated || $usesLiteSpeed || $cdnChanged ) && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
+        if ( ( $delegated || $usesLiteSpeed || $cdnChanged || $rulesChanged ) && ! in_array( 'error', array_column( $results, 'status' ), true ) ) {
             if ( $autoPurge ) {
                 YSCacheEnhancePurge::onContentChange( $saved );
             } elseif ( $enablingLiteSpeed ) {
                 $results = array_merge( $results, YSCacheProviders::purge( $candidate, 'litespeed' ) );
-            } elseif ( $enhanceChanged ) {
+            } elseif ( $delegated && $enhanceChanged ) {
                 $results = array_merge( $results, YSCacheProviders::purge( $candidate, 'enhance' ) );
             }
         }
