@@ -413,6 +413,10 @@ final class YSCache {
                 break;
             }
         }
+        // The event renderer can generate new IDs even on a request without a PHP session.
+        if ( YSCacheIntegrations::hasVisitorEventRenderer() ) {
+            $this->privateResponse = true;
+        }
         if ( ! $this->liteSpeedHtml || $this->edgeHtml || $this->privateResponse ) {
             // Shared HTML caching needs an explicit eligibility decision.
             header( 'Cache-Control: private, no-cache, no-store, must-revalidate', true );
@@ -495,7 +499,7 @@ final class YSCache {
         return $lifetime;
     }
 
-    private static function cachePath( array $settings, bool &$localContactForm ): ?string {
+    private static function cachePath( array $settings, bool &$localContactForm, bool $nativeElementor = false ): ?string {
         $uri = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
         $method = $_SERVER['REQUEST_METHOD'] ?? '';
         if ( ! in_array( $method, [ 'GET', 'HEAD' ], true ) || empty( $uri ) || strlen( $uri ) > 2048 ||
@@ -520,7 +524,8 @@ final class YSCache {
         $allowed = (array) apply_filters( 'ys_cache_public_cookie_names', [] );
         foreach ( $_COOKIE as $name => $value ) {
             if ( ! is_string( $name ) ||
-                ( ! in_array( $name, $allowed, true ) && ! YSCacheIntegrations::isPublicCookie( $name, $value ) ) ||
+                ( ! in_array( $name, $allowed, true ) && ! YSCacheIntegrations::isPublicCookie( $name, $value )
+                    && ! ( $nativeElementor && YSCacheIntegrations::isElementorAttributionCookie( $name ) ) ) ||
                 self::match( $settings['exclude_cookies'], $name, 'prefix' ) ) {
                 return null;
             }
@@ -606,10 +611,26 @@ final class YSCache {
 
         $this->frontendTemplate = true;
         $localContactForm = false;
-        $path = self::cachePath( $settings, $localContactForm );
+        // Elementor already renders its dynamic widgets on every request. We can restrict
+        // its existing document cache on session pages without sharing the full response.
+        $nativeElementor = $this->privateResponse && defined( 'ELEMENTOR_VERSION' ) && self::usesLocalHtml( $settings )
+            && is_singular() && ! is_user_logged_in() && ! post_password_required()
+            && ! is_404() && ! is_search() && ( $_SERVER['REQUEST_METHOD'] ?? '' ) === 'GET'
+            && YSCacheIntegrations::hasOnlyAttributionSession();
+        $path = self::cachePath( $settings, $localContactForm, $nativeElementor );
         if ( $path === null || $this->privateResponse || is_user_logged_in() || is_404() || is_search() ||
             ( is_singular() && post_password_required() ) ) {
             $this->excludeLiteSpeedResponse();
+            if ( $nativeElementor && $path !== null && ! $localContactForm && self::blockingCache( $settings ) === '' ) {
+                $post = get_queried_object();
+                $language = YSCacheIntegrations::languageVariant();
+                if ( $post instanceof \WP_Post && $post->post_status === 'publish' && $post->post_password === '' && $language !== null ) {
+                    YSCacheElementor::register(
+                        (int) $post->ID, $path, $language, $this->requestPageGenerations ?? YSCacheSettingsRepo::pageGenerations( $path ),
+                        self::pathLifetime( $settings['ttl_seconds'], $settings['ttl_paths'], $path )
+                    );
+                }
+            }
             $this->captureAssets( $settings['providers'] );
             return $template;
         }

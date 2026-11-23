@@ -60,6 +60,12 @@ The global HTML lifetime can be set to seven days. In the shorter-lifetime field
 
 To check the result, make two anonymous GET requests to the same URL with no query string. A fresh eligible local page typically returns `X-YS-Cache: MISS` and then `X-YS-Cache: HIT`. A form page excluded by the plugin typically returns `X-YS-Cache: BYPASS` when WordPress handles the request. An upstream response can replay an origin header, so check the upstream status separately. An Nginx cache can report `X-FastCGI-Cache: HIT` when configured to send that header.
 
+## Elementor fragments with PixelYourSite
+
+When a guest page contains visitor-specific PixelYourSite output, the full HTML stays private and returns `X-YS-Cache: BYPASS`. With native Elementor Element Caching active, eligible published singular pages in local YS CACHE mode can reuse an Elementor document fragment. Elementor continues to handle dynamic CSS, JavaScript and deferred widgets. PixelYourSite uses the site's existing settings to produce each visitor's output.
+
+On an origin response, `X-YS-Elementor-Cache: HIT` means Elementor reused a native document fragment. `X-YS-Elementor-Cache: MISS` means the native lookup found no reusable fragment. The header appears only when an eligible lookup takes place. YS CACHE lifetime limits and purges apply to these cached documents.
+
 ## Forms and lifetime
 
 YS CACHE checks the current page’s shortcodes and blocks and inspects the rendered output. A form in a shared footer or builder template can affect every page where it appears. WPForms, Fluent Forms, and JetFormBuilder default to bypass because rendered forms can include expiring tokens, session data, dynamic fields, and payment or validation state. Contact Form 7 normally bypasses too. [WPForms cache and form tokens](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms payments and caching](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
@@ -147,6 +153,12 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 全站 HTML 效期最長可設為七天。在縮短效期欄位，每行輸入一個路徑規則、空白及正整數秒數。例如 `/news/* 300` 將符合快取條件的新聞頁限制在 300 秒內。若同時符合 `/news/latest/ 60`，YS CACHE 會從符合的規則及全站效期中取最短值。HTML 適用條件與 nonce 效期仍然生效。伺服器或 CDN 已存入的快取可能有各自的效期。若需立即套用，請逐層檢查並清除。
 
 使用未登入且不帶查詢字串的訪客請求，連續兩次讀取同一個網址。可快取且尚未建立本機快取的頁面通常會先顯示 `X-YS-Cache: MISS`，接著顯示 `X-YS-Cache: HIT`。由 WordPress 處理且被排除的表單頁通常顯示 `X-YS-Cache: BYPASS`。上游快取可能一併傳回原來的標頭，請另外檢查上游的狀態。若主機有提供相應標頭，Nginx 命中時可看到 `X-FastCGI-Cache: HIT`。
+
+### Elementor 片段快取與 PixelYourSite
+
+若訪客頁含有 PixelYourSite 的個人化輸出，完整 HTML 會維持私有並回傳 `X-YS-Cache: BYPASS`。啟用 Elementor 原生元件快取後，本機 YS CACHE 模式下符合條件的已發布單一內容頁可重用 Elementor 文件片段。Elementor 照常處理動態 CSS、JavaScript 與延後渲染的小工具。PixelYourSite 依站上既有設定產生各訪客的輸出。
+
+來源站回應的 `X-YS-Elementor-Cache: HIT` 表示 Elementor 重用了原生文件片段。`X-YS-Elementor-Cache: MISS` 表示原生查詢當時沒有可重用的片段。僅在符合條件且實際查詢時才會出現此標頭。YS CACHE 的效期限制及清除操作也適用於這些快取文件。
 
 ### 表單和快取效期
 

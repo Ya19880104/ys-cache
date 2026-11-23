@@ -15,6 +15,7 @@ YS CACHE 是 WordPress 的訪客 HTML 快取外掛，支援單頁與全站清除
 
 - **HTML、路徑與表單。** 登入、結帳、購物車工作階段、預覽與私人回應會繞過快取。在「快取設定 → 排除」填寫 `/en/contact/` 等公開路徑。`/news/* 300` 可縮短符合快取條件的 HTML 效期，WordPress nonce 更新及回應檢查也可能讓它提早到期。外掛會偵測頁面內容、版型編輯器、小工具或頁尾實際輸出的表單。 [路徑及縮短效期](docs/cache-integrations.md#路徑規則與縮短快取效期)
 - **表單頁。** WPForms、Fluent Forms 與 JetFormBuilder 維持繞過 HTML 快取。「公開 Contact Form 7 路徑（Beta）」可讓指定網址中符合條件的簡單訪客表單使用本機 YS CACHE HTML 快取，最長五分鐘。若要讓外層頁面保持可快取、表單維持即時渲染，可內嵌獨立排除的同源表單頁。 [表單設定及測試](docs/cache-integrations.md#表單和快取效期)
+- **Elementor 與 PixelYourSite。** 含 PixelYourSite 個人化輸出的訪客頁會保護完整 HTML。啟用 Elementor 原生元件快取後，本機 YS CACHE 模式下符合條件的已發布單一內容頁可重用 Elementor 文件片段。 [Elementor 快取標頭及清除](docs/cache-integrations.md#elementor-片段快取與-pixelyoursite)
 - **CSS 與 JavaScript。** CSS 壓縮、JS 壓縮及延後執行 JS 可各自啟用，預設關閉。排除規則可填代號或路徑。要延後執行某支腳本，請明確填入它在 WordPress 的註冊代號，並測試會用到它的功能。
 - **自動清除。** WordPress Cron 在背景合併相近的變更，先清來源，再依 CDN 層排序清除。WooCommerce 庫存變更只清受影響的頁面。暫時失敗會逐步拉長重試間隔，最長 24 小時。CDN 層可跟隨主設定或僅手動清除。
 - **伺服器。** PHP 允許 WordPress 呼叫重設功能時，可自動偵測 OPcache。相容主機可啟用 LiteSpeed 或獨立 Nginx Cache（Beta）管理來源 HTML，並在 CDN 前清除。在「整合」也可設定 YS CLOUD。 [獨立 Nginx 設定](docs/nginx-cache.md#繁體中文)

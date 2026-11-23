@@ -44,6 +44,7 @@ $mainFiles = @(
     'src/YSCache.php',
     'src/YSCacheAssetOptimization.php',
     'src/YSCacheCdnDiscovery.php',
+    'src/YSCacheElementor.php',
     'src/YSCacheEnhanceIntegration.php',
     'src/YSCacheEnhancePurge.php',
     'src/YSCacheIntegrations.php',

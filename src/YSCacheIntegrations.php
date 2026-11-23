@@ -132,6 +132,7 @@ final class YSCacheIntegrations {
 		$modules = self::formPlugins();
 		foreach ( [
 			'WooCommerce' => function_exists( 'WC' ),
+			'PixelYourSite' => defined( 'PYS_VERSION' ) && function_exists( 'PixelYourSite\\PYS' ),
 			'YS CART' => defined( 'YS_ECOMMERCE_VERSION' ),
 			'Blocksy' => function_exists( 'get_template' ) && get_template() === 'blocksy',
 			'TranslatePress' => class_exists( '\TRP_Translate_Press' ),
@@ -455,9 +456,42 @@ final class YSCacheIntegrations {
 		return false;
 	}
 
+	public static function hasVisitorEventRenderer(): bool {
+		if ( ! defined( 'PYS_VERSION' ) ) {
+			return false;
+		}
+		global $wp_filter;
+		foreach ( $wp_filter['wp_enqueue_scripts']->callbacks ?? [] as $callbacks ) {
+			foreach ( $callbacks as $callback ) {
+				$handler = $callback['function'];
+				if ( is_array( $handler ) && $handler[0] instanceof \PixelYourSite\EventsManager && $handler[1] === 'outputData' ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	public static function hasOnlyAttributionSession(): bool {
+		return empty( $_SESSION ) || ( is_array( $_SESSION ) && defined( 'PYS_VERSION' )
+			&& ! array_diff( array_keys( $_SESSION ), [ 'TrafficSource', 'LandingPage', 'TrafficUtms', 'TrafficUtmsId' ] ) );
+	}
+
+	/** These cookies may accompany a native Elementor fragment lookup on a private response. */
+	public static function isElementorAttributionCookie( string $name ): bool {
+		if ( function_exists( 'session_status' ) && session_status() === PHP_SESSION_ACTIVE && $name === session_name() ) {
+			return true;
+		}
+		return defined( 'PYS_VERSION' ) && in_array( $name, [
+			'pbid', '_fbp', '_fbc', 'pys_first_visit', 'pys_start_session', 'pys_session_limit',
+			'pys_session_entry_referrer', 'pys_landing_page', 'last_pys_landing_page', 'pysTrafficSource', 'last_pysTrafficSource',
+		], true );
+	}
+
 	public static function cacheableHtml( string $html, bool $localContactForm = false ): bool {
 		$localContactForm = $localContactForm && self::supportsPublicContactForms();
-		if ( preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) || self::hasRenderedDynamicForm( $html, $localContactForm ) ||
+		if ( ( stripos( $html, 'pys' ) !== false && preg_match( '~\bpysOptions\s*=|\bid\s*=\s*["\'](?:pys-js-extra|pys_late_event)["\']~i', $html ) )
+			|| preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) || self::hasRenderedDynamicForm( $html, $localContactForm ) ||
 			( $localContactForm && self::hasPrivateContactForms( $html ) ) ) {
 			return false;
 		}
