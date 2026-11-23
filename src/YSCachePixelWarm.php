@@ -15,11 +15,13 @@ final class YSCachePixelWarm {
     private const ACCEPT = 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8';
     private const COOLDOWN = 120;
     private const MAX_BUILDS = 6;
-    private const PENDING_TTL = 300;
+    private const PENDING_TTL = 1200;
+    private const MAX_PENDING = 24;
+    private const MAX_STATE_BYTES = 98304;
     private const SIGNATURE_TTL = 45;
     private static bool $verified = false;
     private static bool $templateWarm = false;
-    private static bool $finishQueued = false;
+    private static ?string $finishStamp = null;
 
     public static function register(): void {
         add_action( self::HOOK, [ self::class, 'run' ] );
@@ -72,81 +74,119 @@ final class YSCachePixelWarm {
     }
 
     private static function enqueue( ?array $context ): bool {
-        if ( $context === null ) {
+        if ( $context === null || self::hasEntry( $context ) ) {
             return false;
         }
         $directory = $context['directory'];
-        $queued = self::lock( $directory, static function () use ( $context, $directory ): bool {
+        $stamp = $context['stamp'];
+        $afterResponse = false;
+        $due = null;
+        $queued = self::lock( $directory, static function () use ( $context, $directory, $stamp, &$afterResponse, &$due ): bool {
             $now = time();
             $state = self::readState( $directory );
-            if ( self::onCooldown( $state, $context['stamp'], $now ) || self::hasEntry( $context ) ) {
+            // Even a duplicate can repair a missed scheduler write from a previous request.
+            if ( isset( $state['queue'][ $stamp ] ) || count( $state['queue'] ) >= self::MAX_PENDING ) {
+                $due = self::nextDue( $state, $now );
                 return false;
             }
-            $state = [
-                'recent' => self::recent( $state, $now ),
-                'pending' => [
-                    'expires' => $now + self::PENDING_TTL,
-                    'stamp' => $context['stamp'],
-                    'profile' => $context['profile'],
-                    'path' => $context['path'],
-                    'template' => $context['template'],
-                ],
+            // Only an idle queue may use the already-finished visitor response to warm its first item.
+            $afterResponse = ! $state['queue'] && self::readyAt( $state, $stamp, $now ) === $now;
+            $state['queue'][ $stamp ] = [
+                'expires' => $now + self::PENDING_TTL,
+                'profile' => $context['profile'],
+                'path' => $context['path'],
+                'template' => $context['template'],
+                'attempt' => 0,
             ];
             if ( ! self::writeState( $directory, $state ) ) {
                 return false;
             }
-            if ( wp_next_scheduled( self::HOOK ) || wp_schedule_single_event( $now + 5, self::HOOK ) ) {
-                return true;
-            }
-            @unlink( $directory . self::STATE );
-            return false;
+            $due = self::nextDue( $state, $now );
+            return true;
         } );
-        if ( $queued && function_exists( 'fastcgi_finish_request' ) ) {
-            self::$finishQueued = true;
+        if ( $due !== null ) {
+            self::wake( $due );
+        }
+        if ( $queued && $afterResponse && function_exists( 'fastcgi_finish_request' ) ) {
+            self::$finishStamp = $stamp;
             add_action( 'shutdown', [ self::class, 'finishAndRun' ], PHP_INT_MAX );
         }
         return $queued;
     }
 
+    private static function wake( int $due ): void {
+        if ( ! wp_next_scheduled( self::HOOK ) ) {
+            wp_schedule_single_event( max( time() + 5, $due ), self::HOOK );
+        }
+    }
+
     public static function run(): void {
         if ( wp_doing_cron() || self::isCli() ) {
-            self::runPending( 8 );
+            self::runPending( 8, 2 );
         }
     }
 
     public static function finishAndRun(): void {
-        if ( ! self::$finishQueued ) {
+        $stamp = self::$finishStamp;
+        if ( $stamp === null ) {
             return;
         }
-        self::$finishQueued = false;
+        self::$finishStamp = null;
         if ( ! function_exists( 'fastcgi_finish_request' ) || ! fastcgi_finish_request() ) {
             return;
         }
         if ( session_status() === PHP_SESSION_ACTIVE ) {
             session_write_close();
         }
-        self::runPending( 3 );
+        self::runPending( 3, 1, $stamp );
     }
 
-    private static function runPending( int $timeout ): void {
+    private static function runPending( int $timeout, int $limit, ?string $onlyStamp = null ): void {
         $directory = YSCacheEarly::directory();
-        $pending = $directory === '' ? null : ( self::readState( $directory )['pending'] ?? null );
-        if ( ! is_array( $pending ) || ( $pending['expires'] ?? 0 ) < time() ) {
+        if ( $directory === '' ) {
             return;
         }
-        $context = self::context( YSCache::settings( true ), $pending['profile'] ?? null, $pending['path'] ?? '/', ! empty( $pending['template'] ) );
-        if ( $context !== null && ( $pending['stamp'] ?? '' ) === $context['stamp'] ) {
-            self::dispatch( $context, $pending, $timeout );
-        } else {
-            self::lock( $directory, static function () use ( $directory, $pending ): bool {
-                $state = self::readState( $directory );
-                if ( ( $state['pending'] ?? null ) === $pending ) {
-                    unset( $state['pending'] );
-                    return self::writeState( $directory, $state );
-                }
-                return false;
-            } );
+        $state = self::readState( $directory );
+        if ( ! $state['queue'] ) {
+            return;
         }
+        $now = time();
+        $due = self::nextDue( $state, $now );
+        // The current one-shot is removed before WP-Cron calls us. Reserve the next
+        // wake before dispatch so another worker can recover even if PHP terminates.
+        self::wake( $due > $now ? $due : $now + self::SIGNATURE_TTL );
+        if ( $due > $now ) {
+            return;
+        }
+        $settings = YSCache::settings( true );
+        foreach ( $state['queue'] as $stamp => $pending ) {
+            if ( $onlyStamp !== null && $onlyStamp !== $stamp ) {
+                continue;
+            }
+            if ( self::readyAt( $state, $stamp, $now ) > $now ) {
+                continue;
+            }
+            $context = self::context( $settings, $pending['profile'], $pending['path'], $pending['template'] );
+            if ( $context === null || $context['stamp'] !== $stamp || self::hasEntry( $context ) ) {
+                self::forget( $directory, $stamp );
+                continue;
+            }
+            self::dispatch( $context, true, $timeout );
+            if ( --$limit === 0 ) {
+                break;
+            }
+        }
+    }
+
+    private static function forget( string $directory, string $stamp ): void {
+        self::lock( $directory, static function () use ( $directory, $stamp ): bool {
+            $state = self::readState( $directory );
+            if ( ! isset( $state['queue'][ $stamp ] ) ) {
+                return false;
+            }
+            unset( $state['queue'][ $stamp ] );
+            return self::writeState( $directory, $state );
+        } );
     }
 
     /** WP CLI can prime a synthetic browser variant with the same validation and cooldown. */
@@ -155,10 +195,11 @@ final class YSCachePixelWarm {
             return false;
         }
         $context = self::context( $settings, $profile, $path, $template );
-        return $context !== null && ( self::hasEntry( $context ) || self::dispatch( $context, null ) );
+        return $context !== null && ( self::hasEntry( $context ) || self::dispatch( $context, false ) );
     }
 
     public static function cancel(): void {
+        self::$finishStamp = null;
         $directory = YSCacheEarly::directory();
         wp_clear_scheduled_hook( self::HOOK );
         if ( $directory !== '' ) {
@@ -264,7 +305,7 @@ final class YSCachePixelWarm {
             $url !== 'https://' . $host . '/' ) {
             return null;
         }
-        if ( strlen( $path ) > 1024 || YSCacheEarlyStore::requestPath( [
+        if ( YSCacheEarlyStore::requestPath( [
             'REQUEST_METHOD' => 'GET', 'HTTPS' => 'on', 'HTTP_HOST' => $host, 'REQUEST_URI' => $path,
         ], [], $host ) !== $path ) {
             return null;
@@ -280,7 +321,7 @@ final class YSCachePixelWarm {
         return compact( 'url', 'host', 'directory', 'profile', 'variant', 'stamp', 'settings', 'path', 'template' );
     }
 
-    private static function dispatch( array $context, ?array $pending, int $timeout = 8 ): bool {
+    private static function dispatch( array $context, bool $queued, int $timeout = 8 ): bool {
         $expires = (string) ( time() + self::SIGNATURE_TTL );
         try {
             $nonce = bin2hex( random_bytes( 16 ) );
@@ -288,26 +329,25 @@ final class YSCachePixelWarm {
             return false;
         }
         $directory = $context['directory'];
-        if ( ! self::lock( $directory, static function () use ( $context, $pending, $expires, $nonce, $directory ): bool {
+        if ( self::hasEntry( $context ) ) {
+            return false;
+        }
+        if ( ! self::lock( $directory, static function () use ( $context, $queued, $expires, $nonce, $directory ): bool {
             $now = time();
             $state = self::readState( $directory );
-            if ( self::hasEntry( $context ) ) {
-                if ( $pending !== null && ( $state['pending'] ?? null ) === $pending ) {
-                    unset( $state['pending'] );
-                    self::writeState( $directory, $state );
-                }
+            if ( self::readyAt( $state, $context['stamp'], $now ) > $now ) {
                 return false;
             }
-            if ( ( $pending === null ? self::onCooldown( $state, $context['stamp'], $now ) : ( $state['pending'] ?? null ) !== $pending ) ||
-                ( $pending !== null && $pending['expires'] < $now ) ) {
+            $stamp = $context['stamp'];
+            if ( $queued && ! isset( $state['queue'][ $stamp ] ) ) {
                 return false;
             }
-            $recent = self::recent( $state, $now );
-            $recent[ $context['stamp'] ] = $now + self::COOLDOWN;
-            return self::writeState( $directory, [
-                'recent' => $recent,
-                'active' => [ $expires, $nonce, $context['stamp'] ],
-            ] );
+            $state['recent'][ $stamp ] = $now + self::COOLDOWN;
+            $state['active'] = [ $expires, $nonce, $stamp ];
+            if ( isset( $state['queue'][ $stamp ] ) && ++$state['queue'][ $stamp ]['attempt'] >= 2 ) {
+                unset( $state['queue'][ $stamp ] );
+            }
+            return self::writeState( $directory, $state );
         } ) ) {
             return false;
         }
@@ -332,7 +372,23 @@ final class YSCachePixelWarm {
             'cookies' => [],
             'limit_response_size' => 1048576,
         ] );
-        return ! is_wp_error( $response ) && wp_remote_retrieve_response_code( $response ) === 200 && self::hasEntry( $context );
+        $success = ! is_wp_error( $response ) && wp_remote_retrieve_response_code( $response ) === 200 && self::hasEntry( $context );
+        self::lock( $directory, static function () use ( $context, $directory, $nonce, $success ): bool {
+            $state = self::readState( $directory );
+            $ownProof = ( $state['active'][1] ?? null ) === $nonce;
+            $finished = $success && isset( $state['queue'][ $context['stamp'] ] );
+            if ( ! $ownProof && ! $finished ) {
+                return false;
+            }
+            if ( $ownProof ) {
+                unset( $state['active'] );
+            }
+            if ( $finished ) {
+                unset( $state['queue'][ $context['stamp'] ] );
+            }
+            return self::writeState( $directory, $state );
+        } );
+        return $success;
     }
 
     private static function sign( array $context, string $expires, string $nonce ): string {
@@ -347,32 +403,57 @@ final class YSCachePixelWarm {
         return YSCacheEarlyStore::read( $context['directory'], $context['host'], '/', $context['variant'] ) !== null;
     }
 
-    private static function recent( array $state, int $now ): array {
-        return array_filter( (array) ( $state['recent'] ?? [] ), static fn( $expires ) => is_int( $expires ) && $expires > $now );
+    private static function readyAt( array $state, string $stamp, int $now ): int {
+        $due = max( $now, (int) ( $state['active'][0] ?? 0 ), $state['recent'][ $stamp ] ?? 0 );
+        return count( $state['recent'] ) >= self::MAX_BUILDS ? max( $due, min( $state['recent'] ) ) : $due;
     }
 
-    private static function onCooldown( array $state, string $stamp, int $now ): bool {
-        $recent = self::recent( $state, $now );
-        return ( $state['pending']['expires'] ?? 0 ) > $now || ( $state['active'][0] ?? 0 ) > $now ||
-            isset( $recent[ $stamp ] ) || count( $recent ) >= self::MAX_BUILDS;
+    private static function nextDue( array $state, int $now ): int {
+        $due = PHP_INT_MAX;
+        foreach ( array_keys( $state['queue'] ) as $stamp ) {
+            $due = min( $due, self::readyAt( $state, $stamp, $now ) );
+        }
+        return $due;
     }
 
     private static function readState( string $directory ): array {
         $path = $directory . self::STATE;
         clearstatcache( true, $path );
-        if ( is_link( $path ) || ! is_file( $path ) ) {
-            return [];
+        $json = ! is_link( $path ) && is_file( $path ) ? @file_get_contents( $path, false, null, 0, self::MAX_STATE_BYTES + 1 ) : false;
+        $data = is_string( $json ) && strlen( $json ) <= self::MAX_STATE_BYTES ? json_decode( $json, true ) : null;
+        $now = time();
+        $state = [ 'recent' => array_filter( (array) ( $data['recent'] ?? [] ), static fn( $expiry ) => is_int( $expiry ) && $expiry > $now ), 'queue' => [] ];
+        if ( isset( $data['active'][0] ) && (int) $data['active'][0] > $now ) {
+            $state['active'] = $data['active'];
         }
-        $json = @file_get_contents( $path, false, null, 0, 4096 );
-        $state = is_string( $json ) && strlen( $json ) < 4096 ? json_decode( $json, true ) : null;
-        return is_array( $state ) ? $state : [];
+        // Recover the previous single-pending file when updating an active site.
+        $queue = (array) ( $data['queue'] ?? [] );
+        if ( isset( $data['pending']['stamp'] ) && is_string( $data['pending']['stamp'] ) ) {
+            $queue[ $data['pending']['stamp'] ] = $data['pending'];
+        }
+        foreach ( array_slice( $queue, 0, self::MAX_PENDING, true ) as $stamp => $job ) {
+            if ( ! is_string( $stamp ) || ! preg_match( '/^[a-f0-9]{64}$/D', $stamp ) || ! is_array( $job ) ||
+                ! is_int( $job['expires'] ?? null ) || $job['expires'] <= $now || ! is_array( $job['profile'] ?? null ) ||
+                ! is_string( $job['path'] ?? '/' ) || ! is_bool( $job['template'] ?? false ) ||
+                ! in_array( $job['attempt'] ?? 0, [ 0, 1 ], true ) ) {
+                continue;
+            }
+            $state['queue'][ $stamp ] = [
+                'expires' => $job['expires'],
+                'profile' => $job['profile'],
+                'path' => $job['path'] ?? '/',
+                'template' => $job['template'] ?? false,
+                'attempt' => $job['attempt'] ?? 0,
+            ];
+        }
+        return $state;
     }
 
     /** Only call with the per-site lock held. */
     private static function writeState( string $directory, array $state ): bool {
         $path = $directory . self::STATE;
-        $json = json_encode( $state );
-        $temporary = is_string( $json ) && ! is_link( $path ) ? @tempnam( $directory, '.ys-pixel-warm-' ) : false;
+        $json = json_encode( $state, JSON_UNESCAPED_SLASHES );
+        $temporary = is_string( $json ) && strlen( $json ) <= self::MAX_STATE_BYTES && ! is_link( $path ) ? @tempnam( $directory, '.ys-pixel-warm-' ) : false;
         if ( $temporary === false ) {
             return false;
         }
@@ -394,7 +475,8 @@ final class YSCachePixelWarm {
             return false;
         }
         try {
-            return flock( $handle, LOCK_EX | LOCK_NB ) && $callback();
+            // The critical sections only touch the small state file. HTTP and WP scheduling run outside.
+            return flock( $handle, LOCK_EX ) && $callback();
         } finally {
             fclose( $handle );
         }

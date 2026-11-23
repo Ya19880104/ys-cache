@@ -16,11 +16,12 @@ namespace PixelYourSite {
 namespace YangSheep\Cache {
     final class YSCacheGuestTemplate {
         public static bool $stored = false;
+        public static array $storedPaths = [];
         public static function isPublicRoute( string $path ): bool {
             return in_array( $path, [ '/shop/category/', '/shop/other/' ], true );
         }
         public static function hasEntry( array $settings, string $path, array $profile ): bool {
-            return self::$stored;
+            return self::$stored || ! empty( self::$storedPaths[ $path ][ $profile['HTTP_ACCEPT_LANGUAGE'] ] );
         }
     }
     final class YSCache {
@@ -76,6 +77,9 @@ namespace {
     }
     function add_action( string $name, callable $callback, int $priority = 10 ): void {
         $GLOBALS['actions'][ $name ][ $priority ] = $callback;
+        if ( $name === 'shutdown' ) {
+            ++$GLOBALS['shutdown_registrations'];
+        }
     }
     function add_filter( string $name, callable $callback, int $priority = 10 ): void {
         $GLOBALS['filters'][ $name ][ $priority ] = $callback;
@@ -84,7 +88,8 @@ namespace {
     function wp_remote_retrieve_response_code( array $response ): int { return $response['response']['code']; }
     function wp_safe_remote_get( string $url, array $args ): array {
         ++$GLOBALS['requests'];
-        expect( $GLOBALS['home'] . ( $GLOBALS['expected_path'] ?? '/' ), $url, 'Only the canonical signed URL is requested' );
+        $path = isset( $GLOBALS['expected_paths'] ) ? array_shift( $GLOBALS['expected_paths'] ) : ( $GLOBALS['expected_path'] ?? '/' );
+        expect( $GLOBALS['home'] . $path, $url, 'Only the canonical signed URL is requested' );
         expect( 0, $args['redirection'], 'Transport cannot redirect' );
         expect( true, $args['sslverify'], 'Transport validates TLS' );
         expect( [], $args['cookies'], 'Transport sends no guest cookies' );
@@ -100,7 +105,7 @@ namespace {
         expect( $GLOBALS['profile']['HTTP_USER_AGENT'], $args['user-agent'], 'Transport keeps the exact desktop variant' );
         expect( $GLOBALS['profile']['HTTP_ACCEPT_LANGUAGE'], $args['headers']['Accept-Language'], 'Language variant preserved' );
         expect( $GLOBALS['profile']['HTTP_SEC_CH_UA_MOBILE'], $args['headers']['Sec-CH-UA-Mobile'], 'Device hint preserved' );
-        ( $GLOBALS['loopback'] )( $args['headers']['X-YS-Cache-Pixel-Warm'], $args['headers']['Accept'] );
+        ( $GLOBALS['loopback'] )( $args['headers']['X-YS-Cache-Pixel-Warm'], $args['headers']['Accept'], $path );
         return [ 'response' => [ 'code' => 200 ] ];
     }
 
@@ -142,7 +147,7 @@ namespace {
         $logged_in = $cron = false;
         $events = $actions = $filters = [];
         $requests = 0;
-        $finish_calls = 0;
+        $finish_calls = $shutdown_registrations = 0;
         $finish_successful = false;
         $expected_timeout = 8;
         $profile = YSCachePixelWarm::profile( $base );
@@ -203,13 +208,16 @@ namespace {
         $logged_in = false;
         expect( true, YSCachePixelWarm::schedule( $settings ), 'Queue a configured, exact direct home variant' );
         $_SERVER['HTTP_ACCEPT_LANGUAGE'] = 'en-US';
-        expect( false, YSCachePixelWarm::schedule( $settings ), 'Coalesce a second variant under the website cooldown' );
+        expect( true, YSCachePixelWarm::schedule( $settings ), 'A distinct browser variant waits behind the first' );
+        expect( false, YSCachePixelWarm::schedule( $settings ), 'The same generation and browser coalesce' );
+        expect( 1, $shutdown_registrations, 'Only the idle-to-first transition gets a post-response worker' );
         expect( 1, count( $events ), 'One global cron task' );
         expect( 0, $requests, 'Enqueuing performs no HTTP request' );
         expect( true, isset( $actions['shutdown'][ PHP_INT_MAX ] ), 'Only a newly queued request sets up the shutdown kick' );
         $state = json_decode( file_get_contents( $directory . '/.pixel-warm.json' ), true );
-        expect( [ 'recent', 'pending' ], array_keys( $state ), 'Pending state stays in the private early cache directory' );
-        expect( true, $state['pending']['expires'] <= time() + 300, 'A pending variant has a bounded lifetime' );
+        expect( [ 'recent', 'queue' ], array_keys( $state ), 'Pending state stays in the private early cache directory' );
+        expect( 2, count( $state['queue'] ), 'Both browser variants survive admission' );
+        expect( true, reset( $state['queue'] )['expires'] <= time() + 1200, 'A pending variant has a bounded lifetime' );
         ( $actions['shutdown'][ PHP_INT_MAX ] )();
         expect( 0, $requests, 'Failed completion of the visitor response leaves the request to Cron' );
         YSCachePixelWarm::run();
@@ -325,7 +333,146 @@ namespace {
         };
         expect( true, YSCachePixelWarm::primeForCli( $settings, $profile, $expected_path, true ), 'Public template artifact produced' );
         expect( false, YSCachePixelWarm::primeForCli( $settings, $profile, '//outside.example/', true ), 'Never warm a network-path reference' );
-        echo "Pixel warm scope, single-use proof, async coalescing, and sterile storage guards passed.\n";
+
+        YSCachePixelWarm::cancel();
+        \YangSheep\Cache\YSCacheGuestTemplate::$stored = false;
+        $_SERVER = $guest;
+        $statePath = $directory . '/.pixel-warm.json';
+        $read = static fn(): array => json_decode( file_get_contents( $statePath ), true );
+        $write = static fn( array $state ) => file_put_contents( $statePath, json_encode( $state, JSON_THROW_ON_ERROR ) );
+        $enqueue = static function ( string $path ) use ( $settings ): bool {
+            $_SERVER['REQUEST_URI'] = $path;
+            return YSCachePixelWarm::scheduleTemplate( $settings, $path );
+        };
+        $tick = static function (): void {
+            unset( $GLOBALS['events'][ YSCachePixelWarm::HOOK ] );
+            YSCachePixelWarm::run();
+        };
+        $first = '/shop/category/';
+        $second = '/shop/other/';
+        $recent = [];
+        $available = time() + 60;
+        for ( $i = 0; $i < 6; ++$i ) {
+            $recent[ hash( 'sha256', 'completed-' . $i ) ] = $available;
+        }
+        $write( [ 'recent' => $recent ] );
+        $beforeRequests = $requests;
+        $beforeShutdown = $shutdown_registrations;
+        expect( false, $enqueue( '/checkout/' ), 'A private route cannot enter the backlog' );
+        expect( true, $enqueue( $first ), 'Retain a public page when all six dispatch slots are used' );
+        expect( false, $enqueue( $first ), 'Second visitor coalesces into the pending generation' );
+        expect( true, $enqueue( $second ), 'Retain the next page at capacity' );
+        unset( $events[ YSCachePixelWarm::HOOK ] );
+        expect( false, $enqueue( $second ), 'Duplicate repairs a missed cron write without becoming a new job' );
+        expect( $available, $events[ YSCachePixelWarm::HOOK ], 'First wake uses the actual end of the rate window' );
+        expect( $beforeShutdown, $shutdown_registrations, 'Backlog does not attach workers to visitor shutdowns' );
+        YSCachePixelWarm::finishAndRun();
+        $tick();
+        expect( $beforeRequests, $requests, 'Admissions and early cron ticks perform no HTTP at capacity' );
+        expect( [ $first, $second ], array_column( $read()['queue'], 'path' ), 'Queue retains arrival order after an early cron tick' );
+
+        $markStored = static function ( string $token, string $accept, string $path ) use ( $profile ): void {
+            \YangSheep\Cache\YSCacheGuestTemplate::$storedPaths[ $path ][ $profile['HTTP_ACCEPT_LANGUAGE'] ] = true;
+        };
+        $loopback = $markStored;
+        $state = $read();
+        array_pop( $state['recent'] );
+        $write( $state );
+        $expected_paths = [ $first ];
+        $tick();
+        expect( $beforeRequests + 1, $requests, 'One free slot admits exactly one outbound render' );
+        expect( [ $second ], array_column( $read()['queue'], 'path' ), 'Next job remains pending when the rolling budget refills' );
+        $state = $read();
+        $state['recent'] = [];
+        $write( $state );
+        $expected_paths = [ $second ];
+        $tick();
+        expect( [], $read()['queue'], 'Cron drains the remaining public job after cooldown' );
+        expect( false, $enqueue( $second ), 'The next visitor finds the warmed browser artifact' );
+        expect( [], $expected_paths, 'Both retained routes rendered at their own canonical URL' );
+
+        \YangSheep\Cache\YSCacheGuestTemplate::$storedPaths = [];
+        YSCachePixelWarm::cancel();
+        $write( [ 'recent' => $recent ] );
+        for ( $i = 0; $i < 25; ++$i ) {
+            $_SERVER['HTTP_ACCEPT_LANGUAGE'] = sprintf( 'en-x%02d', $i );
+            expect( $i < 24, $enqueue( $first ), 'Private queue has exactly 24 places' );
+        }
+        $state = $read();
+        expect( 24, count( $state['queue'] ), 'The 25th variant cannot evict existing work' );
+        $oldest = array_key_first( $state['queue'] );
+        $state['queue'][ $oldest ]['expires'] = time() - 1;
+        $write( $state );
+        expect( true, $enqueue( $first ), 'An expired record makes room for another variant' );
+        expect( false, isset( $read()['queue'][ $oldest ] ), 'Expired work is discarded' );
+        expect( $beforeShutdown, $shutdown_registrations, 'A full backlog uses zero foreground workers' );
+
+        // Updating from a release with one pending job preserves that job and its generation.
+        YSCachePixelWarm::cancel();
+        $_SERVER = $guest;
+        $write( [ 'recent' => $recent ] );
+        expect( true, $enqueue( $second ), 'Seed the old-format fixture with a valid stamp' );
+        $state = $read();
+        $stamp = array_key_first( $state['queue'] );
+        $old = $state['queue'][ $stamp ];
+        unset( $old['attempt'] );
+        $write( [ 'recent' => $recent, 'pending' => [ 'stamp' => $stamp ] + $old ] );
+        expect( false, $enqueue( $second ), 'An upgraded queue coalesces the old pending record' );
+        YSCacheSettingsRepo::$generation = [ 'post-update', 'home' ];
+        expect( true, $enqueue( $second ), 'A later generation admits a separate pending job' );
+        $state = $read();
+        expect( 2, count( $state['queue'] ), 'Both stamps survive the upgrade until cron revalidates them' );
+        $state['recent'] = [];
+        $write( $state );
+        $expected_paths = [ $second ];
+        $beforeRequests = $requests;
+        $tick();
+        expect( $beforeRequests + 1, $requests, 'Only the current generation can reach transport' );
+        expect( [], $read()['queue'], 'Stale generation is discarded and the latest receipt is stored' );
+
+        // A failed first render gets one delayed retry, even without another visitor.
+        \YangSheep\Cache\YSCacheGuestTemplate::$storedPaths = [];
+        YSCachePixelWarm::cancel();
+        $write( [ 'recent' => $recent ] );
+        expect( true, $enqueue( $first ), 'Queue a missing template for retry' );
+        $state = $read();
+        $state['recent'] = [];
+        $write( $state );
+        $expected_paths = [ $first, $first ];
+        $loopback = static function (): void {}; // HTTP 200 with no saved artifact.
+        $beforeRequests = $requests;
+        $tick();
+        $state = $read();
+        expect( 1, reset( $state['queue'] )['attempt'], 'Unsuccessful first render stays pending' );
+        $tick();
+        expect( $beforeRequests + 1, $requests, 'A failed render cannot immediately spend another slot' );
+        $state = $read();
+        $state['recent'] = [];
+        $write( $state );
+        $tick();
+        $tick();
+        expect( [], $expected_paths, 'Cron retried the same canonical URL' );
+        expect( [], $read()['queue'], 'Persistently failing jobs leave the bounded queue' );
+        expect( $beforeRequests + 2, $requests, 'Cron stops after the second unsuccessful render' );
+
+        YSCachePixelWarm::cancel();
+        $beforeShutdown = $shutdown_registrations;
+        $beforeRequests = $requests;
+        $loopback = $markStored;
+        expect( true, $enqueue( $first ), 'Idle site accepts a first post-response job' );
+        expect( true, $enqueue( $second ), 'Another route arriving before its dispatch enters the backlog' );
+        expect( $beforeShutdown + 1, $shutdown_registrations, 'Exactly one visitor registers a completion callback' );
+        $expected_timeout = 3;
+        $expected_paths = [ $first ];
+        YSCachePixelWarm::finishAndRun();
+        YSCachePixelWarm::finishAndRun();
+        expect( $beforeRequests + 1, $requests, 'The completed visitor response only dispatched its own job' );
+        expect( [ $second ], array_column( $read()['queue'], 'path' ), 'Only cron can render the queued backlog' );
+        $expected_timeout = 8;
+        $expected_paths = [ $second ];
+        $tick();
+        expect( [], $read()['queue'], 'Cron completes the second job' );
+        echo "Pixel warm scope, signed transport, bounded rate-limited cron queue, and sterile storage guards passed.\n";
     } finally {
         $entries = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ),
             RecursiveIteratorIterator::CHILD_FIRST );
