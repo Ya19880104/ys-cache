@@ -6,9 +6,10 @@ defined( 'ABSPATH' ) || exit;
 
 final class YSCacheSettingsRepo {
     public const DEFAULT_TTL_SECONDS = 28800;
-    public const MAX_TTL_SECONDS = 604800;
+    /** 頁面內的訪客 nonce 至少有效 12 小時，快取壽命不能超過這個範圍。 */
+    public const MAX_TTL_SECONDS = 43200;
     private const PAGE_PREFIX = 'page:';
-    private const MAX_HTML_AGE = self::MAX_TTL_SECONDS + 86400;
+    private const MAX_HTML_AGE = 604800 + 86400;
     private static array $settings = [];
 
     private static function table(): string {
@@ -35,6 +36,11 @@ final class YSCacheSettingsRepo {
             'ttl_unit'        => 's',
             'auto_purge'      => true,
             'auto_detect'     => true,
+            'early'           => true,
+            'serve_cart_visitors' => false,
+            'preload'         => true,
+            'ignore_params'   => '',
+            // 0.1 版設定，只在遷移時讀取。
             'early_paths'     => '',
             'early_pixel_shell' => false,
             'guest_template' => false,
@@ -96,10 +102,15 @@ final class YSCacheSettingsRepo {
         if ( class_exists( '\YangSheep\Cache\YSCacheEarly' ) && ! \YangSheep\Cache\YSCacheEarly::invalidate() ) {
             return false;
         }
-        return false !== $wpdb->replace( self::table(), [
+        $saved = false !== $wpdb->replace( self::table(), [
             'setting_name'  => 'generation',
             'setting_value' => wp_generate_uuid4(),
         ] );
+        if ( $saved && function_exists( 'do_action' ) ) {
+            /** 全站快取已清除（預載會重新排入所有公開網址）。 */
+            do_action( 'ys_cache_purged_all' );
+        }
+        return $saved;
     }
 
     /** Return the site and page generations in one indexed query. */
@@ -136,6 +147,10 @@ final class YSCacheSettingsRepo {
             self::PAGE_PREFIX . '%',
             sprintf( '%010d:', time() - self::MAX_HTML_AGE )
         ) );
+        if ( function_exists( 'do_action' ) ) {
+            /** 單一路徑群組的快取已清除（預載會重新產生這個路徑）。 */
+            do_action( 'ys_cache_purged_page', $path );
+        }
         return true;
     }
 

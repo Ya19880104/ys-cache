@@ -4,17 +4,23 @@ namespace YangSheep\Cache;
 
 defined( 'ABSPATH' ) || exit;
 
-/** Files shared by the early drop-in and WordPress's completed-response writer. */
+/**
+ * 早期 drop-in 與 WordPress 寫入端共用的頁面儲存區（格式 3）。
+ *
+ * - 位於網站目錄外，目錄 0700、檔案 0600，並檢查擁有者與硬連結數。
+ * - 每個 (主機, 路徑, 變體) 一份 gzip 壓縮的完整 HTML，連同允許重播的安全標頭與完整性雜湊。
+ * - 全站世代（.epoch）與「群組」世代標記：群組是去掉結尾 /page/N/ 的路徑，清除分類時連同分頁一起失效。
+ * - 讀取不加鎖（所有寫入都以 rename 原子替換）；寫入與清除使用排他鎖，寫入前重新比對渲染前的世代快照。
+ */
 final class YSCacheEarlyStore {
-    private const FORMAT = 2;
-    private const MAX_BODY = 1048576;
+    public const MAX_TTL = 43200;
+    private const FORMAT = 3;
+    private const MAX_HTML = 2097152;
+    private const MAX_STORED = 1048576;
     private const MAX_METADATA = 16384;
-    private const MAX_TTL = 604800;
-    private const RENDER_INTERVAL = 120;
-    private const MAX_PAGES_PER_BUCKET = 16;
+    private const MAX_PAGES_PER_BUCKET = 32;
     private const MAX_MARKERS_PER_BUCKET = 64;
     private const FIRST_PAGE_GENERATION = '00000000000000000000000000000000';
-    private const GUEST_CART_TAG = '~<div class="ys-ec-mini-cart" id="ys-ec-mini-cart" data-nonce="([a-f0-9]{10})"\s*>~';
 
     private const PUBLIC_HEADERS = [
         'content-type'                        => 'Content-Type',
@@ -24,67 +30,17 @@ final class YSCacheEarlyStore {
         'cross-origin-embedder-policy'        => 'Cross-Origin-Embedder-Policy',
         'cross-origin-opener-policy'          => 'Cross-Origin-Opener-Policy',
         'cross-origin-resource-policy'        => 'Cross-Origin-Resource-Policy',
-        'permissions-policy'                 => 'Permissions-Policy',
-        'referrer-policy'                    => 'Referrer-Policy',
-        'strict-transport-security'          => 'Strict-Transport-Security',
-        'vary'                               => 'Vary',
-        'x-content-type-options'             => 'X-Content-Type-Options',
-        'x-frame-options'                    => 'X-Frame-Options',
-        'x-permitted-cross-domain-policies'  => 'X-Permitted-Cross-Domain-Policies',
-        'x-robots-tag'                       => 'X-Robots-Tag',
+        'permissions-policy'                  => 'Permissions-Policy',
+        'referrer-policy'                     => 'Referrer-Policy',
+        'strict-transport-security'           => 'Strict-Transport-Security',
+        'vary'                                => 'Vary',
+        'x-content-type-options'              => 'X-Content-Type-Options',
+        'x-frame-options'                     => 'X-Frame-Options',
+        'x-permitted-cross-domain-policies'   => 'X-Permitted-Cross-Domain-Policies',
+        'x-robots-tag'                        => 'X-Robots-Tag',
     ];
 
-    public static function requestPath( array $server, array $cookies, string $host ): ?string {
-        if ( ! self::validAuthority( $host ) ||
-            ! in_array( $server['REQUEST_METHOD'] ?? '', [ 'GET', 'HEAD' ], true ) ||
-            ! in_array( strtolower( (string) ( $server['HTTPS'] ?? '' ) ), [ 'on', '1' ], true ) ||
-            strcasecmp( (string) ( $server['HTTP_HOST'] ?? '' ), $host ) !== 0 ||
-            $cookies || isset( $server['PHP_AUTH_USER'] ) || isset( $server['PHP_AUTH_PW'] ) ||
-            ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ) {
-            return null;
-        }
-
-        foreach ( [
-            'QUERY_STRING', 'HTTP_COOKIE', 'HTTP_COOKIE2', 'HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION',
-            'PHP_AUTH_DIGEST', 'AUTH_TYPE', 'REMOTE_USER', 'REDIRECT_REMOTE_USER',
-            'HTTP_X_AUTH_TOKEN', 'HTTP_X_API_KEY', 'HTTP_ORIGIN', 'HTTP_X_REQUESTED_WITH', 'HTTP_X_WP_NONCE',
-            'HTTP_RANGE', 'HTTP_IF_RANGE', 'HTTP_IF_MATCH', 'HTTP_IF_NONE_MATCH', 'HTTP_IF_MODIFIED_SINCE',
-            'HTTP_IF_UNMODIFIED_SINCE', 'HTTP_CACHE_CONTROL', 'HTTP_PRAGMA', 'HTTP_X_HTTP_METHOD_OVERRIDE', 'HTTP_X_METHOD_OVERRIDE',
-            'HTTP_TRANSFER_ENCODING', 'TRANSFER_ENCODING',
-        ] as $key ) {
-            if ( isset( $server[ $key ] ) && $server[ $key ] !== '' ) {
-                return null;
-            }
-        }
-        $length = $server['CONTENT_LENGTH'] ?? '';
-        $accept = (string) ( $server['HTTP_ACCEPT'] ?? '' );
-        if ( ( $length !== '' && (string) $length !== '0' ) ||
-            ( $accept !== '' && ! preg_match( '~(?:^|,)\s*(?:text/html|\*/\*)(?:\s*[;,]|$)~i', $accept ) ) ) {
-            return null;
-        }
-
-        $path = (string) ( $server['REQUEST_URI'] ?? '' );
-        return self::validRequestPath( $path ) ? $path : null;
-    }
-
-    public static function requestVariant( array $server ): ?string {
-        $userAgent = (string) ( $server['HTTP_USER_AGENT'] ?? '' );
-        $language = strtolower( trim( (string) ( $server['HTTP_ACCEPT_LANGUAGE'] ?? '' ) ) );
-        $mobile = (string) ( $server['HTTP_SEC_CH_UA_MOBILE'] ?? '' );
-        if ( strlen( $userAgent ) > 512 || preg_match( '~[^\x20-\x7e]~', $userAgent ) !== 0 ||
-            strlen( $language ) > 256 || preg_match( '~[^a-z0-9;=,. *-]~', $language ) !== 0 ||
-            ! in_array( $mobile, [ '', '?0', '?1' ], true ) ) {
-            return null;
-        }
-        return hash( 'sha256', $userAgent . "\n" . $language . "\n" . $mobile );
-    }
-
-    private static function validAuthority( string $host ): bool {
-        return preg_match( '~\A(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)(?::([1-9][0-9]{0,4}))?\z~i', $host, $parts )
-            && ( ! isset( $parts[1] ) || (int) $parts[1] <= 65535 );
-    }
-
-    private static function validRequestPath( string $path ): bool {
+    public static function validRequestPath( string $path ): bool {
         return strlen( $path ) <= 2048 && preg_match( '#\A/[A-Za-z0-9._~%/-]*\z#', $path )
             && self::validPathForInvalidation( $path )
             && ! preg_match( '~(?:^|/)(?:wp-admin|wp-json|wp-includes|wp-content|feed|trackback)(?:/|$)|\.php(?:/|$)~i', rawurldecode( $path ) );
@@ -125,48 +81,50 @@ final class YSCacheEarlyStore {
         } ) === true;
     }
 
-    /** Capture these generations before rendering so a concurrent purge cannot publish stale HTML. */
+    /** 渲染前擷取世代，讓同時發生的清除不會被稍後寫入的舊 HTML 蓋回去。 */
     public static function snapshot( string $directory, string $path ): ?array {
-        if ( ! self::validRequestPath( $path ) ) {
-            return null;
-        }
-        return self::locked( $directory, LOCK_SH | LOCK_NB,
-            static fn ( string $directory ): ?array => self::generations( $directory, $path ) );
+        $directory = self::directory( $directory );
+        return $directory === null || ! self::validRequestPath( $path ) ? null : self::generations( $directory, $path );
     }
 
-    public static function write( string $directory, string $host, string $path, array $snapshot, array $headers, string $html, int $ttl, string $variant, ?string $guestCartNonce = null ): bool {
-        $verifiedCart = $guestCartNonce !== null && preg_match( self::GUEST_CART_TAG, $html ) === 1;
-        if ( ! self::validAuthority( $host ) || ! self::validRequestPath( $path ) ||
-            ! self::validVariant( $variant ) || $ttl < 1 || $ttl > self::MAX_TTL || ! self::validHtml( $html, $verifiedCart, $guestCartNonce ) ) {
+    public static function write( string $directory, string $host, string $path, array $snapshot, array $headers, string $html, int $ttl, string $variant ): bool {
+        if ( ! self::validAuthority( $host ) || ! self::validRequestPath( $path ) || ! self::validVariant( $variant ) ||
+            $ttl < 1 || ! self::validHtml( $html ) ) {
             return false;
         }
         $headers = self::safeHeaders( $headers );
         if ( $headers === null ) {
             return false;
         }
-
+        $body = gzencode( $html, 6 );
+        if ( ! is_string( $body ) || strlen( $body ) > self::MAX_STORED ) {
+            return false;
+        }
         $host = strtolower( $host );
         $key = self::entryKey( $host, $path, $variant );
-        return self::locked( $directory, LOCK_EX | LOCK_NB, static function ( string $directory ) use ( $host, $path, $snapshot, $headers, $html, $ttl, $variant, $verifiedCart, $key ): bool {
+        $now = time();
+        $metadata = json_encode( [
+            'format' => self::FORMAT,
+            'host' => $host,
+            'path' => $path,
+            'variant' => $variant,
+            'generation' => $snapshot,
+            'created' => $now,
+            'expires' => $now + min( $ttl, self::MAX_TTL ),
+            'headers' => $headers,
+            'encoding' => 'gzip',
+            'etag' => substr( hash( 'sha256', $html ), 0, 32 ),
+            'body_hash' => hash( 'sha256', $body ),
+        ], JSON_UNESCAPED_SLASHES );
+        if ( ! is_string( $metadata ) || strlen( $metadata ) > self::MAX_METADATA ) {
+            return false;
+        }
+        return self::locked( $directory, LOCK_EX | LOCK_NB, static function ( string $directory ) use ( $path, $snapshot, $key, $metadata, $body ): bool {
             if ( self::generations( $directory, $path ) !== $snapshot ) {
                 return false;
             }
-            $bucket = $directory . '/' . $key[0];
+            $bucket = $directory . '/' . substr( $key, 0, 2 );
             if ( ! self::createBucket( $bucket ) ) {
-                return false;
-            }
-            $metadata = json_encode( [
-                'format' => self::FORMAT,
-                'host' => $host,
-                'path' => $path,
-                'variant' => $variant,
-                'generation' => $snapshot,
-                'expires' => time() + $ttl,
-                'headers' => $headers,
-                'guest_cart' => $verifiedCart,
-                'body_hash' => hash( 'sha256', $html ),
-            ] );
-            if ( ! is_string( $metadata ) || strlen( $metadata ) > self::MAX_METADATA ) {
                 return false;
             }
             $target = $bucket . '/' . $key . '.page';
@@ -177,50 +135,36 @@ final class YSCacheEarlyStore {
                     return false;
                 }
             }
-            return self::replace( $target, $metadata . "\n" . $html );
+            return self::replace( $target, $metadata . "\n" . $body );
         } ) === true;
     }
 
+    /**
+     * 讀取可送出的項目。
+     *
+     * @return array{headers:array,body:string,encoding:string,etag:string,created:int,expires:int}|null
+     */
     public static function read( string $directory, string $host, string $path, string $variant ): ?array {
         if ( ! self::validAuthority( $host ) || ! self::validRequestPath( $path ) || ! self::validVariant( $variant ) ) {
             return null;
         }
-        $host = strtolower( $host );
-        $key = self::entryKey( $host, $path, $variant );
-        return self::locked( $directory, LOCK_SH | LOCK_NB,
-            static fn ( string $directory ): ?array => self::readEntry( $directory, $host, $path, $variant, $key ) );
-    }
-
-    /** Let one eligible late-cache GET attempt a native render for a missing early variant. */
-    public static function claimRender( string $directory, string $host, string $path, string $variant ): bool {
-        if ( ! self::validAuthority( $host ) || ! self::validRequestPath( $path ) || ! self::validVariant( $variant ) ) {
-            return false;
-        }
-        $host = strtolower( $host );
-        $key = self::entryKey( $host, $path, $variant );
-        return self::locked( $directory, LOCK_EX | LOCK_NB, static function ( string $directory ) use ( $host, $path, $variant, $key ): bool {
-            $bucket = $directory . '/' . $key[0];
-            if ( ! self::createBucket( $bucket ) ) {
-                return false;
-            }
-            // Keep 256 slots in each of the 16 buckets. A live collision falls back to the late cache.
-            $marker = $bucket . '/' . substr( $key, 1, 2 ) . '.render';
-            $info = self::stat( $marker );
-            if ( $info !== false && ( ! self::safeEntry( $marker, 0100000 ) || $info['mtime'] > time() - self::RENDER_INTERVAL ) ) {
-                return false;
-            }
-            return self::generations( $directory, $path ) !== null &&
-                self::readEntry( $directory, $host, $path, $variant, $key ) === null && self::replace( $marker, '1' );
-        } ) === true;
-    }
-
-    /** The caller already holds the store lock. */
-    private static function readEntry( string $directory, string $host, string $path, string $variant, string $key ): ?array {
-        $bucket = $directory . '/' . $key[0];
-        if ( ! self::safeEntry( $bucket, 0040000 ) ) {
+        $directory = self::directory( $directory );
+        if ( $directory === null ) {
             return null;
         }
-        $record = self::readFile( $bucket . '/' . $key . '.page', self::MAX_METADATA + self::MAX_BODY + 1 );
+        $host = strtolower( $host );
+        return self::readEntry( $directory, $host, $path, $variant, self::entryKey( $host, $path, $variant ) );
+    }
+
+    /** 預載用：已有剩餘壽命至少 $minRemaining 秒的有效項目時回傳 true。 */
+    public static function fresh( string $directory, string $host, string $path, string $variant, int $minRemaining ): bool {
+        $entry = self::read( $directory, $host, $path, $variant );
+        return $entry !== null && $entry['expires'] - time() >= $minRemaining;
+    }
+
+    private static function readEntry( string $directory, string $host, string $path, string $variant, string $key ): ?array {
+        $bucket = $directory . '/' . substr( $key, 0, 2 );
+        $record = self::readFile( $bucket . '/' . $key . '.page', self::MAX_METADATA + self::MAX_STORED + 1 );
         $newline = $record === null ? false : strpos( $record, "\n" );
         if ( $newline === false || $newline > self::MAX_METADATA ) {
             return null;
@@ -229,38 +173,47 @@ final class YSCacheEarlyStore {
         $now = time();
         if ( ! is_array( $data ) || ( $data['format'] ?? null ) !== self::FORMAT ||
             ( $data['host'] ?? null ) !== $host || ( $data['path'] ?? null ) !== $path || ( $data['variant'] ?? null ) !== $variant ||
-            ! is_int( $data['expires'] ?? null ) || $data['expires'] <= $now || $data['expires'] > $now + self::MAX_TTL ||
+            ! is_int( $data['created'] ?? null ) || ! is_int( $data['expires'] ?? null ) ||
+            $data['expires'] <= $now || $data['expires'] > $now + self::MAX_TTL || $data['created'] > $now + 60 ||
             ! is_array( $data['generation'] ?? null ) || $data['generation'] !== self::generations( $directory, $path ) ||
-            ! is_array( $data['headers'] ?? null ) || self::safeHeaders( $data['headers'] ) !== $data['headers'] ) {
+            ! is_array( $data['headers'] ?? null ) || self::safeHeaders( $data['headers'] ) !== $data['headers'] ||
+            ! in_array( $data['encoding'] ?? null, [ 'gzip' ], true ) ||
+            ! is_string( $data['etag'] ?? null ) || ! preg_match( '~\A[a-f0-9]{32}\z~', $data['etag'] ) ||
+            ! is_string( $data['body_hash'] ?? null ) ) {
             return null;
         }
-
-        $html = substr( $record, $newline + 1 );
-        if ( ! is_string( $data['body_hash'] ?? null ) || ! is_bool( $data['guest_cart'] ?? null ) ||
-            ! self::validHtml( $html, $data['guest_cart'] ) ||
-            ! hash_equals( $data['body_hash'], hash( 'sha256', $html ) ) ) {
+        $body = substr( $record, $newline + 1 );
+        if ( $body === '' || ! hash_equals( $data['body_hash'], hash( 'sha256', $body ) ) ) {
             return null;
         }
-        return [ 'headers' => $data['headers'], 'html' => $html ];
+        return [
+            'headers' => $data['headers'],
+            'body' => $body,
+            'encoding' => $data['encoding'],
+            'etag' => $data['etag'],
+            'created' => $data['created'],
+            'expires' => $data['expires'],
+        ];
     }
 
     public static function invalidateAll( string $directory ): bool {
         return self::locked( $directory, LOCK_EX, [ self::class, 'rotateEpoch' ] ) === true;
     }
 
+    /** 清除一個路徑群組（含該路徑的所有分頁與裝置變體）。 */
     public static function invalidatePath( string $directory, string $path ): bool {
         if ( ! self::validPathForInvalidation( $path ) ) {
             return false;
         }
-        $key = self::pathKey( $path );
+        $key = self::groupKey( $path );
         return self::locked( $directory, LOCK_EX, static function ( string $directory ) use ( $key ): bool {
-            $bucket = $directory . '/' . $key[0];
+            $bucket = $directory . '/' . substr( $key, 0, 2 );
             if ( ! self::createBucket( $bucket ) ) {
                 return self::rotateEpoch( $directory );
             }
             $marker = $bucket . '/' . $key . '.generation';
             if ( self::stat( $marker ) === false && count( glob( $bucket . '/*.generation' ) ?: [] ) >= self::MAX_MARKERS_PER_BUCKET ) {
-                // Old page markers cannot simply be forgotten while matching artifacts or writes may exist.
+                // 舊標記不能直接遺忘（可能仍有對應的項目或寫入中的回應），改為全站換代後再清空。
                 if ( ! self::rotateEpoch( $directory ) ) {
                     return false;
                 }
@@ -275,9 +228,84 @@ final class YSCacheEarlyStore {
         } ) === true;
     }
 
+    /** 刪除過期或世代失效的項目，以及殘留的暫存檔；在時間預算內盡量完成。 */
+    public static function prune( string $directory, float $budgetSeconds = 5.0 ): int {
+        $directory = self::directory( $directory );
+        if ( $directory === null ) {
+            return 0;
+        }
+        $deadline = microtime( true ) + max( 0.1, $budgetSeconds );
+        $removed = 0;
+        foreach ( glob( $directory . '/[0-9a-f][0-9a-f]', GLOB_ONLYDIR ) ?: [] as $bucket ) {
+            if ( ! self::safeEntry( $bucket, 0040000 ) ) {
+                continue;
+            }
+            $pending = $bucket . '/.pending';
+            $info = self::stat( $pending );
+            if ( $info !== false && $info['mtime'] < time() - 3600 && self::safeEntry( $pending, 0100000 ) && @unlink( $pending ) ) {
+                $removed++;
+            }
+            foreach ( glob( $bucket . '/*.page' ) ?: [] as $file ) {
+                if ( microtime( true ) > $deadline ) {
+                    return $removed;
+                }
+                $head = self::readHead( $file );
+                $data = $head === null ? null : json_decode( $head, true, 8 );
+                $stale = ! is_array( $data ) || ( $data['format'] ?? null ) !== self::FORMAT ||
+                    ! is_int( $data['expires'] ?? null ) || $data['expires'] <= time() ||
+                    ! is_string( $data['path'] ?? null ) || ! self::validRequestPath( $data['path'] ) ||
+                    $data['generation'] !== self::generations( $directory, $data['path'] );
+                if ( $stale && self::safeEntry( $file, 0100000 ) && @unlink( $file ) ) {
+                    $removed++;
+                }
+            }
+        }
+        return $removed;
+    }
+
+    /** 移除 0.1 版留下的單字元桶、render 標記與 pixel 狀態檔（格式 2 永遠不會再被讀取）。 */
+    public static function purgeLegacy( string $directory ): void {
+        $directory = self::directory( $directory );
+        if ( $directory === null ) {
+            return;
+        }
+        foreach ( [ '/.pixel-key', '/.pixel-warm.json', '/.pixel-warm.lock' ] as $name ) {
+            if ( self::safeEntry( $directory . $name, 0100000 ) ) {
+                @unlink( $directory . $name );
+            }
+        }
+        foreach ( glob( $directory . '/[0-9a-f]', GLOB_ONLYDIR ) ?: [] as $bucket ) {
+            if ( ! self::safeEntry( $bucket, 0040000 ) ) {
+                continue;
+            }
+            foreach ( [ '*.page', '*.generation', '*.render', '.pending' ] as $pattern ) {
+                foreach ( glob( $bucket . '/' . $pattern ) ?: [] as $file ) {
+                    if ( self::safeEntry( $file, 0100000 ) ) {
+                        @unlink( $file );
+                    }
+                }
+            }
+            @rmdir( $bucket );
+        }
+    }
+
+    /** 管理介面用的概況：項目數與佔用位元組（不驗證內容）。 */
+    public static function stats( string $directory ): array {
+        $directory = self::directory( $directory );
+        $entries = 0;
+        $bytes = 0;
+        if ( $directory !== null ) {
+            foreach ( glob( $directory . '/[0-9a-f][0-9a-f]/*.page' ) ?: [] as $file ) {
+                $entries++;
+                $bytes += (int) @filesize( $file );
+            }
+        }
+        return [ 'entries' => $entries, 'bytes' => $bytes ];
+    }
+
     private static function generations( string $directory, string $path ): ?array {
-        $key = self::pathKey( $path );
-        $bucket = $directory . '/' . $key[0];
+        $key = self::groupKey( $path );
+        $bucket = $directory . '/' . substr( $key, 0, 2 );
         if ( self::stat( $bucket ) !== false && ! self::safeEntry( $bucket, 0040000 ) ) {
             return null;
         }
@@ -302,29 +330,36 @@ final class YSCacheEarlyStore {
         return hash( 'sha256', $host . "\n" . $path . "\n" . $variant );
     }
 
+    /** 群組：解碼後去掉結尾斜線與 /page/N，分頁與主頁共用同一個世代。 */
+    public static function groupPath( string $path ): string {
+        $path = rtrim( rawurldecode( $path ), '/' );
+        $path = (string) preg_replace( '~/page/[0-9]+\z~', '', $path );
+        return $path === '' ? '/' : $path;
+    }
+
+    private static function groupKey( string $path ): string {
+        return hash( 'sha256', self::groupPath( $path ) );
+    }
+
+    private static function validAuthority( string $host ): bool {
+        return preg_match( '~\A(?:\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)(?::([1-9][0-9]{0,4}))?\z~i', $host, $parts )
+            && ( ! isset( $parts[1] ) || (int) $parts[1] <= 65535 );
+    }
+
     private static function validVariant( string $variant ): bool {
-        return preg_match( '~\A[a-f0-9]{64}\z~', $variant ) === 1;
+        return preg_match( '~\A[a-z0-9_-]{1,48}\z~', $variant ) === 1;
     }
 
-    private static function pathKey( string $path ): string {
-        return hash( 'sha256', rtrim( rawurldecode( $path ), '/' ) ?: '/' );
-    }
-
-    private static function validHtml( string $html, bool $verifiedCart, ?string $guestCartNonce = null ): bool {
-        if ( strlen( $html ) > self::MAX_BODY ||
-            preg_match( '~<!doctype\s+html|<html(?:\s|>)~i', substr( $html, 0, 4096 ) ) !== 1 ||
-            preg_match( '~</html\s*>~i', substr( $html, -8192 ) ) !== 1 ) {
-            return false;
-        }
-        if ( $verifiedCart ) {
-            if ( preg_match_all( self::GUEST_CART_TAG, $html, $matches, PREG_OFFSET_CAPTURE ) !== 1 ||
-                ( $guestCartNonce !== null && ! hash_equals( $guestCartNonce, $matches[1][0][0] ) ) ) {
-                return false;
-            }
-            // Inspect the rest without the one verified, unpartitioned built-in guest cart opening tag.
-            $html = substr_replace( $html, '', $matches[0][0][1], strlen( $matches[0][0][0] ) );
-        }
-        return preg_match( '~<[a-z][a-z0-9:-]*\s[^>]*\b(?:nonce|data-[a-z0-9_:-]*nonce|data-ys-ec-partition-(?:key|generation))\s*=~i', $html ) === 0;
+    /**
+     * 只存完整 HTML 文件。CSP nonce 屬於單次回應，不能共用；YS CART 分區屬性屬於單一訪客。
+     * data-*nonce 屬性允許共用：寫入端只接受無 session 請求，這些都是所有訪客相同的 uid 0 nonce，壽命也低於 12 小時。
+     */
+    private static function validHtml( string $html ): bool {
+        return strlen( $html ) <= self::MAX_HTML &&
+            preg_match( '~<!doctype\s+html|<html(?:\s|>)~i', substr( $html, 0, 4096 ) ) === 1 &&
+            preg_match( '~</html\s*>~i', substr( $html, -8192 ) ) === 1 &&
+            preg_match( '~<(?:script|style|link)\b[^>]*\snonce\s*=~i', $html ) === 0 &&
+            preg_match( '~\sdata-ys-ec-partition-(?:key|generation)\s*=~i', $html ) === 0;
     }
 
     private static function safeHeaders( array $headers ): ?array {
@@ -436,7 +471,20 @@ final class YSCacheEarlyStore {
         return is_string( $value ) && strlen( $value ) <= $limit ? $value : null;
     }
 
-    /** All callers hold the same exclusive lock, allowing a single staged file per directory. */
+    private static function readHead( string $file ): ?string {
+        if ( ! self::safeEntry( $file, 0100000 ) ) {
+            return null;
+        }
+        $handle = @fopen( $file, 'rb' );
+        if ( $handle === false ) {
+            return null;
+        }
+        $line = fgets( $handle, self::MAX_METADATA + 2 );
+        fclose( $handle );
+        return is_string( $line ) ? rtrim( $line, "\n" ) : null;
+    }
+
+    /** 所有呼叫端都持有同一把排他鎖，因此每個目錄只需一個暫存檔。 */
     private static function replace( string $target, string $value ): bool {
         $stage = dirname( $target ) . '/.pending';
         if ( ( self::stat( $target ) !== false && ! self::safeEntry( $target, 0100000 ) ) ||

@@ -4,23 +4,31 @@ namespace YangSheep\Cache;
 
 defined( 'ABSPATH' ) || exit;
 
-/** Owns the WordPress drop-in only for sites with explicitly selected public paths. */
+/**
+ * 管理 wp-content/advanced-cache.php：WordPress 載入前，替所有公開網址送出已快取的完整 HTML。
+ *
+ * 送出規則與 WP Rocket 相同（cookie 排除清單、忽略追蹤參數、桌機與手機兩種變體）；
+ * 寫入規則較嚴格，見 YSCacheEarlyRequest::writerPath() 與 YSCache 的寫入檢查。
+ */
 final class YSCacheEarly {
     private const MARK = "<?php\n// YS CACHE guest reader v1";
+    private const NONCE_MARGIN = 300;
     private static ?string $directory = null;
+    private static ?array $config = null;
 
     public static function observeChanges(): void {
         foreach ( [ 'added_option', 'updated_option', 'deleted_option' ] as $hook ) {
             add_action( $hook, static function ( string $option ): void {
                 if ( preg_match( '/^(?:active_plugins$|template$|stylesheet$|home$|siteurl$|blog_public$|'
                     . 'pys_(?:core|facebook|ga|google_ads|consent|pbid_secret)$|xoo-el-|cpfence|'
-                    . 'woocommerce_(?:coming_soon|store_pages_only|cart_page_id|checkout_page_id|myaccount_page_id)$|trp_settings$|ys_tp_settings$)/i', $option ) ) {
+                    . 'woocommerce_(?:coming_soon|store_pages_only|cart_page_id|checkout_page_id|myaccount_page_id|default_customer_address|currency)$|'
+                    . 'trp_settings$|ys_tp_settings$)/i', $option ) ) {
                     self::invalidate();
                 }
             } );
         }
         add_action( 'admin_init', static function (): void {
-            // Current tracking settings are written to the provider's own table.
+            // PixelYourSite 12 的設定寫在自己的資料表，從管理請求判斷。
             $action = $_POST['action'] ?? '';
             if ( ( $_SERVER['REQUEST_METHOD'] ?? '' ) === 'POST' && current_user_can( 'manage_options' )
                 && ( isset( $_POST['pys'] ) || ( is_string( $action ) && str_starts_with( $action, 'pys_save_' ) ) ) ) {
@@ -55,6 +63,7 @@ final class YSCacheEarly {
         return ( $parts['scheme'] ?? '' ) === 'https' ? strtolower( $parts['host'] ) . ( isset( $parts['port'] ) ? ':' . $parts['port'] : '' ) : '';
     }
 
+    /** 舊版的路徑清單格式；0.2 起所有公開網址都送早期快取，只在遷移時讀取。 */
     public static function paths( string $input ): array {
         $paths = [];
         foreach ( preg_split( '/\R/', $input, -1, PREG_SPLIT_NO_EMPTY ) as $line ) {
@@ -67,9 +76,96 @@ final class YSCacheEarly {
         return array_values( array_unique( $paths ) );
     }
 
+    /** 設定是否要求早期快取（本機 HTML 模式，且沒有交給 CDN 快取 HTML）。 */
+    public static function wanted( array $settings ): bool {
+        return ! empty( $settings['early'] ) && YSCache::usesLocalHtml( $settings ) && ! YSCache::hasEdgeHtml( $settings )
+            && ! self::automaticLanguageRedirect();
+    }
+
+    /** 早期讀取器已安裝，且這次請求可以使用寫入端。 */
+    public static function active( array $settings ): bool {
+        return self::wanted( $settings ) && self::owned() && self::directory() !== '' && self::host() !== '';
+    }
+
+    /** TranslatePress 官方自動偵測會依瀏覽器轉址，同一網址對不同訪客意義不同，不能共用。 */
+    private static function automaticLanguageRedirect(): bool {
+        return class_exists( '\TRP_IN_Automatic_Language_Detection' ) || class_exists( '\TRP_Automatic_Language_Detection' );
+    }
+
+    /**
+     * 讀取器與寫入端共用的設定。
+     *
+     * @return array{directory:string,host:string,deny_cookies:array,deny_agents:array,ignore_params:array,languages:array,writer_cookies:array,session_name:string}
+     */
+    public static function config( array $settings, bool $fresh = false ): array {
+        if ( self::$config !== null && ! $fresh ) {
+            return self::$config;
+        }
+        $deny = YSCacheEarlyRequest::DENY_COOKIES;
+        if ( empty( $settings['serve_cart_visitors'] ) ) {
+            array_push( $deny, ...YSCacheEarlyRequest::CART_COOKIES );
+        }
+        foreach ( [ 'LOGGED_IN_COOKIE', 'SECURE_AUTH_COOKIE', 'AUTH_COOKIE', 'PASS_COOKIE', 'USER_COOKIE' ] as $constant ) {
+            if ( defined( $constant ) && is_string( constant( $constant ) ) && constant( $constant ) !== '' ) {
+                $deny[] = constant( $constant );
+            }
+        }
+        foreach ( self::lines( $settings['exclude_cookies'] ?? '' ) as $name ) {
+            if ( preg_match( '~\A[\x21-\x7e]{1,128}\z~', $name ) && ! str_contains( $name, '=' ) ) {
+                $deny[] = rtrim( $name, '*' );
+            }
+        }
+        $ignore = [];
+        foreach ( self::lines( $settings['ignore_params'] ?? '' ) as $name ) {
+            if ( preg_match( '~\A[a-zA-Z0-9_.\-\[\]]{1,64}\z~', $name ) ) {
+                $ignore[] = strtolower( $name );
+            }
+        }
+        $writer = (array) apply_filters( 'ys_cache_writer_cookie_prefixes', YSCacheEarlyRequest::ANALYTICS_COOKIES );
+        $session = function_exists( 'session_name' ) ? (string) session_name() : '';
+        return self::$config = [
+            'directory'      => self::directory(),
+            'host'           => self::host(),
+            'deny_cookies'   => array_values( array_unique( array_filter( $deny, 'is_string' ) ) ),
+            'deny_agents'    => self::lines( $settings['exclude_agents'] ?? '' ),
+            'ignore_params'  => array_values( array_unique( $ignore ) ),
+            'languages'      => self::suggestionLanguages(),
+            'writer_cookies' => array_values( array_filter( $writer, static fn ( $prefix ): bool => is_string( $prefix ) && $prefix !== '' ) ),
+            'session_name'   => $session !== '' ? $session : 'PHPSESSID',
+        ];
+    }
+
+    /** YS TranslatePress Addons 依 Accept-Language 顯示語言建議時，以建議語言區分變體。 */
+    private static function suggestionLanguages(): array {
+        if ( ! class_exists( '\YangSheep\TPAddons\Support\YSTPAddonsModules' ) || ! class_exists( '\TRP_Translate_Press' )
+            || ! \YangSheep\TPAddons\Support\YSTPAddonsModules::is_enabled( 'auto_detect' ) ) {
+            return [];
+        }
+        $settings = get_option( 'trp_settings', [] );
+        return array_values( array_filter( (array) ( $settings['publish-languages'] ?? [] ),
+            static fn ( $code ): bool => is_string( $code ) && preg_match( '/\A[a-zA-Z0-9_-]{1,32}\z/', $code ) === 1 ) );
+    }
+
+    /**
+     * 這個路徑的項目壽命：套用路徑規則，並確保頁面裡的訪客 nonce 在壽命內一直有效。
+     * WordPress 接受前一個 tick 的 nonce，所以只要壽命不超過 nonce_life 的一半就安全。
+     */
+    public static function ttl( array $settings, string $path ): int {
+        $ttl = YSCache::pathLifetime( (int) ( $settings['ttl_seconds'] ?? 0 ), (string) ( $settings['ttl_paths'] ?? '' ), $path );
+        $cap = YSCacheEarlyStore::MAX_TTL;
+        foreach ( [ -1, 'wp_rest', 'ajax-event-nonce', 'ys_ec_auth', 'ys_ec_cart_nonce' ] as $action ) {
+            $life = apply_filters( 'nonce_life', DAY_IN_SECONDS, $action );
+            if ( ! is_numeric( $life ) || ! is_finite( (float) $life ) || $life <= 0 ) {
+                return 0;
+            }
+            $cap = min( $cap, (int) floor( $life / 2 ) - self::NONCE_MARGIN );
+        }
+        return max( 0, min( $ttl, $cap ) );
+    }
+
     public static function sync( array $settings ): bool {
-        $paths = self::paths( $settings['early_paths'] ?? '' );
-        if ( ( ! $paths && empty( $settings['guest_template'] ) ) || ! YSCache::usesLocalHtml( $settings ) || YSCache::hasEdgeHtml( $settings ) ) {
+        self::$config = null;
+        if ( ! self::wanted( $settings ) ) {
             return self::remove();
         }
         if ( ! defined( 'WP_CACHE' ) || ! WP_CACHE || is_multisite() || self::host() === '' || YSCache::blockingCache( $settings ) !== '' ) {
@@ -79,16 +175,11 @@ final class YSCacheEarly {
         if ( $directory === '' || ! YSCacheEarlyStore::initialize( $directory ) ) {
             return false;
         }
-        $pixel = ! empty( $settings['early_pixel_shell'] ) && in_array( '/', $paths, true );
-        if ( $pixel && ! YSCachePixelTransport::provision( $directory ) ) {
-            return false;
-        }
         $file = WP_CONTENT_DIR . '/advanced-cache.php';
         if ( is_link( $file ) || ( file_exists( $file ) && ! self::owned() && filesize( $file ) !== 0 ) ) {
             return false;
         }
-        // Content and settings can change while the drop-in is absent. Start a new
-        // generation before making previously detached storage reachable again.
+        // drop-in 不在時內容與設定都可能改變，重新接上前先換一個世代，舊檔案不會再被送出。
         if ( ! self::owned() && ! YSCacheEarlyStore::invalidateAll( $directory ) ) {
             return false;
         }
@@ -96,25 +187,31 @@ final class YSCacheEarly {
         if ( ! $reader ) {
             return false;
         }
-        // A host can replace its generated security policy without a WordPress option update.
+        // 主機可以不經 WordPress 選項直接替換安全政策檔；命中時比對雜湊，確保重播的安全標頭仍然正確。
         $policy = ( defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins' ) . '/cpfence.php';
         $digest = is_file( $policy ) ? hash_file( 'sha256', $policy ) : '';
         if ( $digest === false ) {
             return false;
         }
+        $config = self::config( $settings, true );
+        $reader_config = [
+            'directory'     => $config['directory'],
+            'host'          => $config['host'],
+            'deny_cookies'  => $config['deny_cookies'],
+            'deny_agents'   => $config['deny_agents'],
+            'ignore_params' => $config['ignore_params'],
+            'languages'     => $config['languages'],
+            'policy_file'   => $policy,
+            'policy_digest' => $digest,
+        ];
         $restoreEmpty = is_file( $file ) && ( filesize( $file ) === 0 || str_contains( (string) file_get_contents( $file ), "// Restore empty drop-in\n" ) );
-        $agents = preg_split( '/\R/', $settings['exclude_agents'] ?? '', -1, PREG_SPLIT_NO_EMPTY );
-        $export = static fn( $value ) => var_export( $value, true );
-        $code = self::MARK . "\n" . ( $restoreEmpty ? "// Restore empty drop-in\n" : '' )
+        $code = self::MARK . "\n// YS CACHE early cache v3\n" . ( $restoreEmpty ? "// Restore empty drop-in\n" : '' )
             . "if ( ! defined( 'ABSPATH' ) || defined( 'MULTISITE' ) && MULTISITE ) return;\n"
-            . '$ysReader = ' . $export( $reader ) . ";\n"
+            . '$ysReader = ' . var_export( $reader, true ) . ";\n"
             . "if ( ! is_file( \$ysReader ) ) return;\n"
-            . 'if ( ' . ( $pixel ? '! isset($_GET[\'ys_cache_pixel\']) && ! isset($_GET[\'ys_cache_pixel_fallback\']) && ' : '' )
-            . '! in_array( $_SERVER[\'REQUEST_URI\'] ?? \'\', ' . $export( $paths ) . ", true ) ) return;\n"
-            . '$ysPolicy = ' . $export( $policy ) . ";\n"
-            . 'if ( (is_file($ysPolicy) ? @hash_file(\'sha256\', $ysPolicy) : \'\') !== ' . $export( $digest ) . " ) return;\n"
             . '$ysRead = require $ysReader;' . "\n"
-            . 'if ( is_callable( $ysRead ) ) $ysRead(' . $export( $directory ) . ', ' . $export( self::host() ) . ', ' . $export( $agents ) . ', ' . $export( $pixel ) . ");\n";
+            . 'if ( is_callable( $ysRead ) ) $ysRead( ' . var_export( $reader_config, true ) . " );\n";
+        YSCacheEarlyStore::purgeLegacy( $directory );
         if ( self::owned() && file_get_contents( $file ) === $code ) {
             return true;
         }
@@ -144,7 +241,19 @@ final class YSCacheEarly {
         }
     }
 
+    /** 外掛更新後，舊版 drop-in 仍以舊格式呼叫讀取器；偵測到時重新同步一次。 */
+    public static function maybeUpgrade( array $settings ): void {
+        if ( ! self::owned() ) {
+            return;
+        }
+        $head = (string) @file_get_contents( WP_CONTENT_DIR . '/advanced-cache.php', false, null, 0, 160 );
+        if ( ! str_contains( $head, '// YS CACHE early cache v3' ) ) {
+            self::sync( $settings );
+        }
+    }
+
     public static function remove(): bool {
+        self::$config = null;
         if ( ! self::owned() ) {
             return true;
         }
@@ -165,5 +274,13 @@ final class YSCacheEarly {
             return true;
         }
         return self::remove();
+    }
+
+    private static function lines( $value ): array {
+        if ( ! is_string( $value ) ) {
+            return [];
+        }
+        return array_values( array_filter( array_map( 'trim', preg_split( '/\R/', $value, -1, PREG_SPLIT_NO_EMPTY ) ?: [] ),
+            static fn ( string $line ): bool => $line !== '' ) );
     }
 }
