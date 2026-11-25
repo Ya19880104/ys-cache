@@ -1235,6 +1235,14 @@ msgstr "對購物車內有商品的顧客也送出快取頁面"
 msgid "WooCommerce cart fragments refresh the mini cart after the page loads. Leave this off if the theme shows cart-dependent prices or messages on catalog pages."
 msgstr "頁面載入後，由 WooCommerce 購物車片段（cart fragments）更新迷你購物車。若佈景主題會在商品目錄頁顯示隨購物車變動的價格或訊息，請保持關閉。"
 
+msgid "Prefetch links on hover"
+msgstr "滑鼠停留時預先抓取連結"
+
+#: templates/admin/settings.php
+msgid "While the early cache runs, the browser fetches a page when the pointer rests on its link, so cached pages open almost instantly on click. Cart, checkout and account pages are never prefetched, and WordPress turns this off for logged-in users."
+msgstr "早期快取運作時，訪客的滑鼠停在連結上，瀏覽器就會先抓取該頁，點擊時快取頁面幾乎立即顯示。購物車、結帳與帳戶頁不會預先抓取；登入的使用者由 WordPress 自動停用。"
+
+#: templates/admin/settings.php
 msgid "Preload public pages (desktop and phone)"
 msgstr "預載公開頁面（桌機與手機）"
 

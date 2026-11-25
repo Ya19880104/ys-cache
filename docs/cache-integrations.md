@@ -110,9 +110,13 @@ YS CACHE caps each copy at half of `nonce_life` minus five minutes, which is 42,
 
 With **Preload public pages (desktop and phone)** on, WordPress Cron renders public pages in the background, so visitors rarely meet an empty cache. Preload covers the front page, the shop and blog pages, published products, non-empty product categories and tags, published pages other than cart, checkout, account and excluded paths, and the 50 most recent posts, up to 2,000 URLs. Adjust the list with the `ys_cache_preload_paths` filter. Preload requests each URL once as a desktop and once as a phone. Both User-Agents end in `YSCachePreload/1`. The requests carry no cookies and a signed `X-YS-Cache-Preload` header, so they always reach WordPress.
 
-The job runs every minute. It sends one request at a time for up to 40 seconds per run and skips pages whose copy has at least 30 minutes left. A run stops early when two responses take longer than 10 seconds, a request cannot connect, or the server answers with a status such as 403, 429 or 503. Each page gets up to two attempts per device. Saving the settings, turning preload on and site-wide purges queue every URL. A targeted purge queues only the cleared URLs. An hourly pass refreshes copies that are about to expire. **Cache settings → HTML cache** shows the queue, the last run, the last error and the stored copies.
+The job runs every minute. It sends one request at a time for up to 40 seconds per run and skips pages whose copy is still fresh: with a 10-hour lifetime, a copy is renewed once it has less than 90 minutes left. A run stops early when two responses take longer than 10 seconds, a request cannot connect, or the server answers with a status such as 403, 429 or 503. Each page gets up to two attempts per device. Saving the settings, turning preload on and site-wide purges queue every URL. A targeted purge queues only the cleared URLs. A refresh pass runs every half lifetime, between 5 minutes and 1 hour, so copies are renewed before they expire. **Cache settings → HTML cache** shows the queue, the last run, the last error and the stored copies.
 
 Early hits end before WordPress can start WP-Cron. When most visits are cached, trigger `wp-cron.php` from a server cron job every minute. The server must also reach the site's canonical HTTPS hostname.
+
+### Prefetch links on hover
+
+With **Prefetch links on hover** on and the early cache running, YS CACHE switches WordPress speculative loading to `prefetch` with `moderate` eagerness. The browser fetches a page when the pointer rests on its link for about 200 ms, so a cached page is usually complete before the click. Cart, checkout and account pages are never prefetched, and WordPress turns speculative loading off for logged-in users. Prefetch requests are served from the early cache like normal visits.
 
 ### Purges and refills
 
@@ -134,7 +138,7 @@ Menus, widgets, the Customizer, theme changes, plugin activation and updates, ca
 | --- | --- |
 | `X-YS-Cache: HIT` and `X-YS-Cache-Engine: early` | YS CACHE sent the page before WordPress loaded. |
 | `Cache-Control: private, no-cache` | The browser revalidates on each visit and shared caches do not store the page. Without `no-store`, back and forward navigation stays instant. |
-| `ETag` and `Last-Modified` | A request with a matching `If-None-Match` gets `304 Not Modified` without a body. |
+| `ETag` and `Last-Modified` | A request with a matching `If-None-Match` gets `304 Not Modified` without a body. Some servers remove conditional headers before PHP runs, for example Nginx with a FastCGI cache zone on Enhance hosts. There the hit is a fast `200` with the full page. |
 | `X-YS-Cache-Early` | The request went to WordPress. The value gives the reason. |
 
 Early hits also send `X-Accel-Expires: 0`, so an Nginx FastCGI cache does not store them.
@@ -317,9 +321,13 @@ YS CACHE 將每份快取限制在 `nonce_life` 的一半減五分鐘，預設為
 
 開啟「預載公開頁面（桌機與手機）」後，WordPress Cron 會在背景產生公開頁面，訪客很少遇到空的快取。預載範圍包括首頁、商店頁與文章列表頁、已發布商品、非空的商品分類與標籤、購物車、結帳、帳戶與排除路徑以外的已發布頁面，以及最近 50 篇文章，上限 2,000 個網址。可用 `ys_cache_preload_paths` 篩選器調整清單。每個網址各以桌機與手機請求一次，兩者的 User-Agent 都以 `YSCachePreload/1` 結尾。請求不帶 Cookie，並帶有簽章的 `X-YS-Cache-Preload` 標頭，因此一定會交給 WordPress。
 
-背景工作每分鐘執行，一次送出一個請求，每輪最多 40 秒，剩餘效期 30 分鐘以上的頁面會略過。連續兩個回應超過 10 秒、連線失敗，或伺服器回應 403、429、503 等狀態時，該輪會提早結束。每個頁面的每種裝置最多嘗試兩次。儲存設定、開啟預載及全站清除後會排入所有網址。單頁清除只排入被清除的網址。每小時另會補上即將到期的頁面。「快取設定 → HTML 快取」會顯示佇列、上次執行結果、最近一次錯誤與已儲存的快取。
+背景工作每分鐘執行，一次送出一個請求，每輪最多 40 秒，仍然新鮮的頁面會略過；以 10 小時效期為例，剩不到 90 分鐘時才重新產生。連續兩個回應超過 10 秒、連線失敗，或伺服器回應 403、429、503 等狀態時，該輪會提早結束。每個頁面的每種裝置最多嘗試兩次。儲存設定、開啟預載及全站清除後會排入所有網址。單頁清除只排入被清除的網址。另有補件每半個效期執行一次（介於 5 分鐘到 1 小時），頁面到期前就會換新。「快取設定 → HTML 快取」會顯示佇列、上次執行結果、最近一次錯誤與已儲存的快取。
 
 提前命中會在 WordPress 啟動 WP-Cron 前結束。若多數造訪都命中快取，請用主機排程每分鐘呼叫 `wp-cron.php`。伺服器也必須能連線到網站的正式 HTTPS 主機名稱。
+
+#### 滑鼠停留時預先抓取連結
+
+開啟「滑鼠停留時預先抓取連結」且早期快取運作時，YS CACHE 會把 WordPress 推測載入改為 `prefetch`、積極程度 `moderate`。訪客的滑鼠在連結上停留約 200 毫秒，瀏覽器就先抓取該頁，點擊時快取頁面通常已經下載完成。購物車、結帳與帳戶頁不會預先抓取，登入的使用者則由 WordPress 自動停用推測載入。預先抓取的請求和一般造訪一樣由早期快取送出。
 
 #### 清除與回填
 
@@ -341,7 +349,7 @@ YS CACHE 將每份快取限制在 `nonce_life` 的一半減五分鐘，預設為
 | --- | --- |
 | `X-YS-Cache: HIT` 與 `X-YS-Cache-Engine: early` | 頁面在 WordPress 載入前由 YS CACHE 送出。 |
 | `Cache-Control: private, no-cache` | 瀏覽器每次造訪都會重新驗證，共用快取不會儲存頁面。由於沒有 `no-store`，上一頁與下一頁仍可立即顯示。 |
-| `ETag` 與 `Last-Modified` | `If-None-Match` 相符的請求會收到不含內容的 `304 Not Modified`。 |
+| `ETag` 與 `Last-Modified` | `If-None-Match` 相符的請求會收到不含內容的 `304 Not Modified`。部分主機會在 PHP 執行前移除條件請求標頭，例如 Enhance 主機上啟用 FastCGI 快取區的 Nginx；這時命中會是快速的 `200`，內容為完整頁面。 |
 | `X-YS-Cache-Early` | 請求已交給 WordPress，值為原因。 |
 
 提前命中也會送出 `X-Accel-Expires: 0`，避免 Nginx FastCGI 快取儲存這些回應。

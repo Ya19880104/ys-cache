@@ -52,6 +52,7 @@ final class YSCache {
         add_action( 'template_redirect', [ $this, 'protectPrivateResponse' ], PHP_INT_MAX );
         add_filter( 'template_include', [ $this, 'serveOrCapture' ], PHP_INT_MAX );
         add_filter( 'wp_speculation_rules_href_exclude_paths', [ $this, 'excludeTrackedNavigations' ] );
+        add_filter( 'wp_speculation_rules_configuration', [ $this, 'speculationConfiguration' ] );
         add_filter( 'trp_translated_html', [ $this, 'rewriteTranslatedHtml' ], PHP_INT_MAX, 4 );
         add_filter( 'litespeed_buffer_before', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
         add_filter( 'litespeed_buffer_finalize', [ $this, 'protectLiteSpeedBody' ], PHP_INT_MAX );
@@ -93,6 +94,23 @@ final class YSCache {
             }
         }
         return array_values( array_unique( $paths ) );
+    }
+
+    /**
+     * 早期快取運作時，把 WordPress 推測載入改為滑鼠停留約 0.2 秒就預先抓取（moderate）。
+     * 快取頁面幾十毫秒就能送出，點擊時頁面已在瀏覽器裡；登入者由 WordPress 本身排除（設定為 null）。
+     */
+    public function speculationConfiguration( $config ) {
+        if ( ! is_array( $config ) ) {
+            return $config;
+        }
+        $settings = self::settings();
+        if ( empty( $settings['prefetch'] ) || ! YSCacheEarly::active( $settings ) ) {
+            return $config;
+        }
+        $config['mode'] = 'prefetch';
+        $config['eagerness'] = 'moderate';
+        return $config;
     }
 
     public static function enable( ?array $settings = null, ?string $rocketMigrationId = null ): bool {
@@ -172,6 +190,7 @@ final class YSCache {
             'early'           => ! empty( $settings['early'] ),
             'serve_cart_visitors' => ! empty( $settings['serve_cart_visitors'] ),
             'preload'         => ! empty( $settings['preload'] ),
+            'prefetch'        => ! empty( $settings['prefetch'] ),
             'ignore_params'   => self::lines( $settings['ignore_params'] ?? '' ),
             // 0.1 版的路徑清單、pixel shell 與 guest template 已停用，只保留欄位供遷移判斷。
             'early_paths'     => '',

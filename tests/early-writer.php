@@ -241,6 +241,15 @@ namespace {
             echo 'ok';
             return;
         }
+        if ( $path === '/__speculation-config/' ) {
+            header( 'Content-Type: application/json' );
+            $cache = YangSheep\Cache\YSCache::instance();
+            echo json_encode( [
+                'guest' => $cache->speculationConfiguration( [ 'mode' => 'auto', 'eagerness' => 'auto' ] ),
+                'disabled' => $cache->speculationConfiguration( null ),
+            ] );
+            return;
+        }
         if ( $path === '/__speculation/' ) {
             function wc_get_page_id( string $page ) { return [ 'shop' => 5, 'cart' => 6, 'checkout' => 7, 'myaccount' => 8 ][ $page ] ?? -1; }
             function get_permalink( int $id ) { return home_url( [ 5 => '/shop/', 6 => '/cart/', 7 => '/checkout/', 8 => '/my-account/' ][ $id ] ); }
@@ -666,6 +675,8 @@ namespace {
         // 推測式預取只排除購物車、結帳與帳戶頁。
         expect_same( [ '/wp-admin/*', '/cart', '/cart/*', '/checkout', '/checkout/*', '/my-account', '/my-account/*' ],
             json_decode( $fetch( '/__speculation/' )['body'], true ), 'Catalog pages stay prefetchable' );
+        expect_same( [ 'guest' => [ 'mode' => 'prefetch', 'eagerness' => 'moderate' ], 'disabled' => null ],
+            json_decode( $fetch( '/__speculation-config/' )['body'], true ), 'Prefetch on hover while the early cache runs; keep WordPress disabling it for logged-in users' );
 
         // 設定：新欄位、停用的舊欄位，以及儲存後同步讀取器設定。
         expect_same( [ 'saved' => true, 'early' => true, 'serve_cart_visitors' => false, 'preload' => false, 'ignore_params' => "campaign_ref\npartner",

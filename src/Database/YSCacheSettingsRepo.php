@@ -39,6 +39,7 @@ final class YSCacheSettingsRepo {
             'early'           => true,
             'serve_cart_visitors' => false,
             'preload'         => true,
+            'prefetch'        => true,
             'ignore_params'   => '',
             // 0.1 版設定，只在遷移時讀取。
             'early_paths'     => '',

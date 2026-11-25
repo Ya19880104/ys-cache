@@ -267,6 +267,7 @@
                 early: field('early'),
                 serve_cart_visitors: field('serve_cart_visitors'),
                 preload: field('preload'),
+                prefetch: field('prefetch'),
                 ignore_params: field('ignore_params'),
                 exclude_cookies: field('exclude_cookies'),
                 exclude_agents: field('exclude_agents'),

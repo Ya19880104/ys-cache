@@ -273,6 +273,12 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                 <?php esc_html_e( 'Preload public pages (desktop and phone)', 'ys-cache' ); ?>
             </label>
             <p class="description" id="ys-cache-preload-help"><?php esc_html_e( 'WordPress Cron renders public pages in the background after purges and before cached copies expire. Cache hits do not start WP-Cron, so run it from a server cron job when most visits are cached.', 'ys-cache' ); ?></p>
+            <label class="ys-cache-switch">
+                <input name="prefetch" type="checkbox" role="switch" aria-describedby="ys-cache-prefetch-help" <?php checked( ! empty( $settings['prefetch'] ) ); ?>>
+                <span class="ys-cache-switch-track" aria-hidden="true"></span>
+                <?php esc_html_e( 'Prefetch links on hover', 'ys-cache' ); ?>
+            </label>
+            <p class="description" id="ys-cache-prefetch-help"><?php esc_html_e( 'While the early cache runs, the browser fetches a page when the pointer rests on its link, so cached pages open almost instantly on click. Cart, checkout and account pages are never prefetched, and WordPress turns this off for logged-in users.', 'ys-cache' ); ?></p>
             <?php if ( $preloadStatus !== null || $earlyStats !== null ) : ?>
                 <div id="ys-cache-preload-status" data-preload-status>
                     <?php if ( $preloadStatus !== null ) : ?>
