@@ -37,7 +37,7 @@ $headers = [ 'Content-Type: text/html; charset=UTF-8', 'Strict-Transport-Securit
 $server = null;
 try {
     expect_same( true, YSCacheEarlyStore::initialize( $directory ), 'Initialize the store' );
-    expect_same( true, YSCacheEarlyStore::write( $directory, $host, '/hello/', YSCacheEarlyStore::snapshot( $directory, '/hello/' ), $headers, $html, 600, 'd' ), 'Seed the desktop entry' );
+    expect_same( true, YSCacheEarlyStore::write( $directory, $host, '/hello/', YSCacheEarlyStore::snapshot( $directory, '/hello/' ), $headers, $html, 600, 'd', hash_file( 'sha256', $policy ) ), 'Seed the desktop entry under the current security policy' );
 
     $env = array_merge( getenv(), [
         'YS_TEST_ABSPATH' => ABSPATH, 'YS_TEST_DIRECTORY' => $directory, 'YS_TEST_HOST' => $host,

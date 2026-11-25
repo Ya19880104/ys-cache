@@ -303,10 +303,12 @@ final class YSCachePreload {
             }
             $config = YSCacheEarly::config( $settings );
             $locale = (string) get_locale();
-            $fresh = static function ( string $path, string $device ) use ( $directory, $host, $config, $locale, $freshness ): bool {
+            $fresh = static function ( string $path, string $device ) use ( $directory, $host, $config, $locale, $settings ): bool {
                 $server = self::server( $device, self::pathLocale( $path, $config, $locale ) ) + [ 'REQUEST_URI' => $path ];
                 $variant = YSCacheEarlyRequest::variant( $server, $config );
-                return $variant !== null && YSCacheEarlyStore::fresh( $directory, $host, $path, $variant, $freshness );
+                // 依這個路徑自己的壽命（ttl_paths 可設較短）計算門檻，否則短壽命的頁面永遠不會被視為新鮮。
+                $threshold = self::timing( YSCacheEarly::ttl( $settings, $path ) )[1];
+                return $variant !== null && YSCacheEarlyStore::fresh( $directory, $host, $path, $variant, $threshold );
             };
             $fetch = static function ( string $path, string $device ) use ( $host, $config, $locale ): array {
                 $started = microtime( true );
@@ -347,8 +349,11 @@ final class YSCachePreload {
      * 門檻為壽命的 3/4（至少比補件間隔多 1 分鐘、最多 90 分鐘），兩次補件之間項目不會過期。
      */
     public static function timing( int $ttl ): array {
-        $refresh = max( self::MIN_REFRESH_SECONDS, min( self::REFRESH_SECONDS, intdiv( max( 0, $ttl ), 2 ) ) );
-        return [ $refresh, min( self::FRESH_SECONDS, max( $refresh + 60, intdiv( max( 0, $ttl ) * 3, 4 ) ) ) ];
+        $ttl = max( 0, $ttl );
+        $refresh = max( self::MIN_REFRESH_SECONDS, min( self::REFRESH_SECONDS, intdiv( $ttl, 2 ) ) );
+        $fresh = min( self::FRESH_SECONDS, max( $refresh + 60, intdiv( $ttl * 3, 4 ) ) );
+        // 門檻不能超過壽命本身，否則剛寫入的項目也不會被視為新鮮（壽命極短時每次補件都重新產生）。
+        return [ $refresh, $ttl > 0 ? min( $fresh, max( 1, $ttl - 30 ) ) : $fresh ];
     }
 
     /**

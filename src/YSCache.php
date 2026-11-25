@@ -26,6 +26,8 @@ final class YSCache {
     /** 早期快取寫入候選：YSCacheEarlyRequest::writerPath() 回傳的路徑與變體。 */
     private ?array $earlyRequest = null;
     private ?array $earlySnapshot = null;
+    /** 渲染開始時的主機安全政策檔雜湊（寫入早期快取時一併記錄）。 */
+    private string $earlyPolicy = '';
     /** TranslatePress 非預設語言：等 trp_translated_html 輸出翻譯結果後再寫入。 */
     private ?array $pendingEarly = null;
 
@@ -358,10 +360,14 @@ final class YSCache {
         if ( YSCacheEarly::active( $settings ) ) {
             // 只有乾淨請求（無查詢字串、無 session 或狀態 cookie）的渲染可以寫入早期快取。
             $request = YSCacheEarlyRequest::writerPath( $_SERVER, $_COOKIE, YSCacheEarly::config( $settings ) );
-            $snapshot = ( $request === null || is_user_logged_in() ) ? null : YSCacheEarlyStore::snapshot( YSCacheEarly::directory(), $request['path'] );
+            // 帶預載標頭卻沒有有效簽章的請求可以跳過讀取器，但不能覆寫共用快取。
+            $forged = isset( $_SERVER[ YSCacheEarlyRequest::PRELOAD_HEADER ] ) && ! YSCachePreload::isPreloadRequest();
+            $snapshot = ( $request === null || $forged || is_user_logged_in() ) ? null : YSCacheEarlyStore::snapshot( YSCacheEarly::directory(), $request['path'] );
             if ( $snapshot !== null ) {
                 $this->earlyRequest = $request;
                 $this->earlySnapshot = $snapshot;
+                // 渲染開始時的安全政策：標頭由這份政策產生，讀取器據此判斷項目是否仍適用。
+                $this->earlyPolicy = YSCacheEarly::policyDigest();
                 // 這次渲染會給所有訪客共用：不讓 PixelYourSite 建立 PHP session（命中時本來就不會執行 PHP，行為一致）。
                 add_filter( 'pys_skip_session', '__return_true', PHP_INT_MAX );
             }
@@ -913,6 +919,10 @@ final class YSCache {
         }
         $path = $this->earlyRequest['path'];
         $decoded = rawurldecode( $path );
+        // WordPress 的 slug 一律小寫；大小寫不同的網址是外部別名，不另存一份（清除時以小寫群組一併處理）。
+        if ( preg_match( '~[A-Z]~', $decoded ) ) {
+            return false;
+        }
         $excluded = (string) $settings['exclude_paths'];
         $forms = (string) $settings['public_cf7_paths'];
         // 公開表單頁需要每位訪客各自的表單權杖，不放進早期快取。
@@ -1083,7 +1093,8 @@ final class YSCache {
         // 渲染期間這個頁面被清除過：不寫入，交給下一次請求重新產生。
         if ( $this->requestGenerationUnchanged() ) {
             YSCacheEarlyStore::write( YSCacheEarly::directory(), YSCacheEarly::host(), $path, $this->earlySnapshot, $headers,
-                $html, $ttl, $this->earlyRequest['variant'] );
+                $html, $ttl, $this->earlyRequest['variant'], $this->earlyPolicy,
+                isset( $_SERVER['REQUEST_TIME_FLOAT'] ) ? (float) $_SERVER['REQUEST_TIME_FLOAT'] : null );
         }
     }
 

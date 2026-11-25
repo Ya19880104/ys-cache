@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class YSCacheEarlyStore {
     public const MAX_TTL = 43200;
-    private const FORMAT = 3;
+    private const FORMAT = 4;
     private const MAX_HTML = 2097152;
     private const MAX_STORED = 1048576;
     private const MAX_METADATA = 16384;
@@ -92,9 +92,15 @@ final class YSCacheEarlyStore {
         return $directory === null || ! self::validRequestPath( $path ) ? null : self::generations( $directory, $path );
     }
 
-    public static function write( string $directory, string $host, string $path, array $snapshot, array $headers, string $html, int $ttl, string $variant ): bool {
+    /**
+     * 寫入一份完整 HTML。
+     *
+     * @param string     $policy    渲染開始時的主機安全政策檔雜湊；讀取時與當下的政策比對，政策改變後舊項目自動失效。
+     * @param float|null $startedAt 請求開始時間（REQUEST_TIME_FLOAT）。之後若有清除，WordPress 可能已讀入清除前的設定，不寫入。
+     */
+    public static function write( string $directory, string $host, string $path, array $snapshot, array $headers, string $html, int $ttl, string $variant, string $policy = '', ?float $startedAt = null ): bool {
         if ( ! self::validAuthority( $host ) || ! self::validRequestPath( $path ) || ! self::validVariant( $variant ) ||
-            $ttl < 1 || ! self::validHtml( $html ) ) {
+            $ttl < 1 || ! self::validHtml( $html ) || ! preg_match( '~\A(?:[a-f0-9]{64})?\z~', $policy ) ) {
             return false;
         }
         $headers = self::safeHeaders( $headers );
@@ -120,12 +126,14 @@ final class YSCacheEarlyStore {
             'encoding' => 'gzip',
             'etag' => substr( hash( 'sha256', $html ), 0, 32 ),
             'body_hash' => hash( 'sha256', $body ),
+            'policy' => $policy,
         ], JSON_UNESCAPED_SLASHES );
         if ( ! is_string( $metadata ) || strlen( $metadata ) > self::MAX_METADATA ) {
             return false;
         }
-        return self::locked( $directory, LOCK_EX | LOCK_NB, static function ( string $directory ) use ( $path, $snapshot, $key, $metadata, $body ): bool {
-            if ( self::generations( $directory, $path ) !== $snapshot ) {
+        return self::locked( $directory, LOCK_EX | LOCK_NB, static function ( string $directory ) use ( $path, $snapshot, $key, $metadata, $body, $startedAt ): bool {
+            if ( self::generations( $directory, $path ) !== $snapshot ||
+                ( $startedAt !== null && self::changedSince( $directory, $path, $startedAt ) ) ) {
                 return false;
             }
             $bucket = $directory . '/' . substr( $key, 0, 2 );
@@ -184,7 +192,8 @@ final class YSCacheEarlyStore {
             ! is_array( $data['headers'] ?? null ) || self::safeHeaders( $data['headers'] ) !== $data['headers'] ||
             ! in_array( $data['encoding'] ?? null, [ 'gzip' ], true ) ||
             ! is_string( $data['etag'] ?? null ) || ! preg_match( '~\A[a-f0-9]{32}\z~', $data['etag'] ) ||
-            ! is_string( $data['body_hash'] ?? null ) ) {
+            ! is_string( $data['body_hash'] ?? null ) ||
+            ! is_string( $data['policy'] ?? null ) || ! preg_match( '~\A(?:[a-f0-9]{64})?\z~', $data['policy'] ) ) {
             return null;
         }
         $body = substr( $record, $newline + 1 );
@@ -198,7 +207,21 @@ final class YSCacheEarlyStore {
             'etag' => $data['etag'],
             'created' => $data['created'],
             'expires' => $data['expires'],
+            'policy' => $data['policy'],
         ];
+    }
+
+    /** 這次請求開始之後，全站或此路徑群組被清除過（標記檔修改時間不早於請求開始的那一秒）。 */
+    private static function changedSince( string $directory, string $path, float $startedAt ): bool {
+        $second = (int) floor( $startedAt );
+        $key = self::groupKey( $path );
+        foreach ( [ $directory . '/.epoch', $directory . '/' . substr( $key, 0, 2 ) . '/' . $key . '.generation' ] as $marker ) {
+            $info = self::stat( $marker );
+            if ( $info !== false && $info['mtime'] >= $second ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static function invalidateAll( string $directory ): bool {
@@ -335,10 +358,14 @@ final class YSCacheEarlyStore {
         return hash( 'sha256', $host . "\n" . $path . "\n" . $variant );
     }
 
-    /** 群組：解碼後去掉結尾斜線與 /page/N，分頁與主頁共用同一個世代。 */
+    /**
+     * 群組：解碼、英文字母轉小寫（WordPress 的 slug 一律小寫，大小寫不同的網址仍回應同一頁），
+     * 再去掉結尾的 /page/N、/comment-page-N 與文章分頁 /N，讓這些網址與主頁共用同一個世代、一起被清除。
+     * 只轉換 ASCII 字母：strtolower 會受 locale 影響，WordPress 載入前後算出的鍵必須一致。
+     */
     public static function groupPath( string $path ): string {
-        $path = rtrim( rawurldecode( $path ), '/' );
-        $path = (string) preg_replace( '~/page/[0-9]+\z~', '', $path );
+        $path = strtr( rtrim( rawurldecode( $path ), '/' ), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz' );
+        $path = (string) preg_replace( '~(?:/page/[0-9]+|/comment-page-[0-9]+|/[0-9]+)\z~', '', $path );
         return $path === '' ? '/' : $path;
     }
 

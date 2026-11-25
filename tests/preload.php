@@ -417,7 +417,8 @@ namespace {
         expect_same( [ 'd', 'm', 'd', 'm' ], [ $preloadVariant( '/shop/', 'd' ), $preloadVariant( '/shop/', 'm' ), $preloadVariant( '/zh-tw/shop/', 'd' ), $preloadVariant( '/zh-tw/shop/', 'm' ) ],
             'Preloaded pages are the shared no-suggestion variants that same-language visitors hit' );
         expect_same( [ 450, 675 ], Preload::timing( 900 ), 'A 15-minute lifetime shortens both so pages never expire between refreshes' );
-        expect_same( [ 300, 360 ], Preload::timing( 120 ), 'Very short lifetimes still wait 5 minutes between full refreshes' );
+        expect_same( [ 300, 90 ], Preload::timing( 120 ), 'Very short lifetimes wait 5 minutes between full refreshes and count a fresh render as fresh' );
+        expect_same( [ 900, 1350 ], Preload::timing( 1800 ), 'A 30-minute path rule gets its own threshold' );
         expect_same( true, Preload::fullDue( $full, $now + 450, $epoch, 450 ), 'Short lifetimes refresh sooner' );
         $crowded = Preload::withFull( Preload::normalize( [], $now ), array_map( static fn ( int $i ): string => '/q' . $i . '/', range( 1, 4100 ) ), $now, '' );
         expect_same( 4000, count( $crowded['pending'] ), 'Cap the full refresh' );

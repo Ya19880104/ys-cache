@@ -184,9 +184,37 @@ try {
     expect_same( false, is_file( $directory . '/.pixel-warm.json' ), 'Remove legacy pixel warm state' );
     expect_same( $html, stored_html( YSCacheEarlyStore::read( $directory, $host, $path, 'd' ) ), 'Legacy cleanup keeps current entries' );
 
+    // 審查修正：大小寫變體、留言分頁與文章分頁和主頁同一群組，清除正式網址時一併失效。
+    expect_same( '/product/lavender-soap', YSCacheEarlyStore::groupPath( '/product/LAVENDER-SOAP/' ), 'Fold ASCII letter case in groups' );
+    expect_same( '/blog-post', YSCacheEarlyStore::groupPath( '/blog-post/comment-page-2/' ), 'Comment pages share the post group' );
+    expect_same( '/blog-post', YSCacheEarlyStore::groupPath( '/blog-post/3/' ), 'Post pagination shares the post group' );
+    expect_same( "/\u{88FD}\u{7682}", YSCacheEarlyStore::groupPath( '/%E8%A3%BD%E7%9A%82/' ), 'Non-ASCII slugs are only decoded' );
+    $variants = [ '/product/lavender-soap/', '/product/LAVENDER-SOAP/', '/product/Lavender-Soap/' ];
+    foreach ( $variants as $route ) {
+        expect_same( true, YSCacheEarlyStore::write( $directory, $host, $route, YSCacheEarlyStore::snapshot( $directory, $route ), $headers, $html, 600, 'd' ), 'Seed case variant ' . $route );
+    }
+    expect_same( true, YSCacheEarlyStore::invalidatePath( $directory, '/product/lavender-soap/' ), 'Purge the canonical product URL' );
+    foreach ( $variants as $route ) {
+        expect_same( null, YSCacheEarlyStore::read( $directory, $host, $route, 'd' ), 'The canonical purge also clears ' . $route );
+    }
+
+    // 審查修正：請求開始之後才發生的清除，代表 WordPress 可能讀到清除前的設定，不能寫入。
+    $race = '/race-page/';
+    YSCacheEarlyStore::invalidatePath( $directory, $race );
+    $raceSnapshot = YSCacheEarlyStore::snapshot( $directory, $race );
+    expect_same( false, YSCacheEarlyStore::write( $directory, $host, $race, $raceSnapshot, $headers, $html, 600, 'd', '', microtime( true ) - 10 ), 'Refuse a render that started before the purge' );
+    expect_same( true, YSCacheEarlyStore::write( $directory, $host, $race, $raceSnapshot, $headers, $html, 600, 'd', '', microtime( true ) + 2 ), 'Accept a render that started after the purge' );
+
+    // 審查修正：每份項目記錄寫入時的安全政策雜湊，讀取器據此判斷標頭是否仍適用。
+    $policy = str_repeat( 'b', 64 );
+    expect_same( true, YSCacheEarlyStore::write( $directory, $host, '/policy-page/', YSCacheEarlyStore::snapshot( $directory, '/policy-page/' ), $headers, $html, 600, 'd', $policy ), 'Store the policy digest' );
+    expect_same( $policy, YSCacheEarlyStore::read( $directory, $host, '/policy-page/', 'd' )['policy'] ?? null, 'Return the stored policy digest' );
+    expect_same( '', YSCacheEarlyStore::read( $directory, $host, '/race-page/', 'd' )['policy'] ?? null, 'Entries without a policy file store an empty digest' );
+    expect_same( false, YSCacheEarlyStore::write( $directory, $host, '/policy-page/', YSCacheEarlyStore::snapshot( $directory, '/policy-page/' ), $headers, $html, 600, 'd', 'not-a-digest' ), 'Reject malformed policy digests' );
+
     // 在 CLI 執行讀取器會直接返回，不送出也不刪除項目。
     $_SERVER = array_replace( $_SERVER, [ 'REQUEST_METHOD' => 'GET', 'HTTPS' => 'on', 'HTTP_HOST' => $host, 'REQUEST_URI' => $path ] );
-    $gate = require dirname( __DIR__ ) . '/templates/early-reader.php';
+    $gate = require dirname( __DIR__ ) . '/templates/early-cache.php';
     $gate( [ 'directory' => $directory, 'host' => $host ] );
     expect_same( $html, stored_html( YSCacheEarlyStore::read( $directory, $host, $path, 'd' ) ), 'Running the reader in CLI returns without serving or removing the entry' );
 

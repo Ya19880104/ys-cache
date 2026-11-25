@@ -48,10 +48,11 @@ return static function ( $config = null ): void {
         header( 'X-YS-Cache-Early: miss' );
         return;
     }
-    // 重播的安全標頭必須與目前的主機安全政策一致；政策檔變更後先交回 WordPress，等下次同步。
+    // 重播的安全標頭必須來自目前的主機安全政策：每份項目記錄寫入時的政策檔雜湊，政策改變後舊項目交回 WordPress 重新產生，
+    // 新渲染的頁面帶著新的標頭與雜湊，立刻可以送出，不必等下次同步設定。
     $policy = (string) ( $config['policy_file'] ?? '' );
-    $digest = (string) ( $config['policy_digest'] ?? '' );
-    if ( $policy !== '' && ( is_file( $policy ) ? (string) @hash_file( 'sha256', $policy ) : '' ) !== $digest ) {
+    $digest = $policy !== '' && is_file( $policy ) ? (string) @hash_file( 'sha256', $policy ) : '';
+    if ( $digest !== $entry['policy'] ) {
         header( 'X-YS-Cache-Early: policy' );
         return;
     }

@@ -62,7 +62,7 @@ $mainFiles = @(
     'src/YSCacheStorage.php',
     'templates/admin/settings.php',
     'templates/cached-page.php',
-    'templates/early-reader.php',
+    'templates/early-cache.php',
     'vendor/autoload.php'
 )
 $hubFiles = @(

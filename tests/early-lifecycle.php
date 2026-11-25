@@ -129,6 +129,48 @@ namespace {
         expect_same( true, Store::write( $directory, $host, $path, $fresh, $headers, $current, 300, $variant ), 'The reattached reader can cache new content' );
         expect_same( $current, gzdecode( Store::read( $directory, $host, $path, $variant )['body'] ?? '' ), 'The new generation serves only the fresh content' );
 
+        // 審查修正：drop-in 以新檔名呼叫讀取器並包上例外處理，外掛退回舊版時不會讓整站出錯。
+        $code = (string) file_get_contents( $dropin );
+        expect_same( true, str_contains( $code, 'early-cache.php' ), 'The drop-in calls the renamed reader' );
+        expect_same( false, str_contains( $code, 'early-reader.php' ), 'The drop-in never calls the 0.1 reader file' );
+        expect_same( true, str_contains( $code, 'catch ( \Throwable' ), 'The reader call is wrapped so a version mismatch falls back to WordPress' );
+
+        // 審查修正：/tmp（tmpfs）清空後自動重建儲存區，清除時不再卸下 drop-in。
+        $wipe = static function ( string $path ): void {
+            if ( ! is_dir( $path ) ) {
+                return;
+            }
+            $items = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $path, FilesystemIterator::SKIP_DOTS ), RecursiveIteratorIterator::CHILD_FIRST );
+            foreach ( $items as $item ) {
+                $item->isDir() && ! $item->isLink() ? rmdir( $item->getPathname() ) : unlink( $item->getPathname() );
+            }
+            rmdir( $path );
+        };
+        $resetStore = static function (): void {
+            $property = new ReflectionProperty( Early::class, 'storeReady' );
+            $property->setAccessible( true );
+            $property->setValue( null, null );
+        };
+        expect_same( true, Store::write( $directory, $host, $path, Store::snapshot( $directory, $path ), $headers, $current, 300, $variant ), 'Seed an entry before the wipe' );
+        $wipe( $directory );
+        $resetStore();
+        expect_same( true, Early::active( $settings ), 'The early cache heals itself after /tmp is wiped' );
+        expect_same( true, is_array( Store::snapshot( $directory, $path ) ), 'The store directory, lock and epoch are recreated' );
+        expect_same( null, Store::read( $directory, $host, $path, $variant ), 'Nothing from before the wipe is served' );
+        $wipe( $directory );
+        $resetStore();
+        expect_same( true, Early::invalidate( $path ), 'A purge with a missing store succeeds' );
+        expect_same( true, Early::owned(), 'A purge with a missing store keeps the drop-in' );
+        expect_same( true, is_array( Store::snapshot( $directory, $path ) ), 'The purge recreated the store' );
+
+        // 審查修正：drop-in 與目前設定不一致時，maybeUpgrade() 自動重新同步（例如 TranslatePress 網址、排除規則或外掛版本改變）。
+        expect_same( true, file_put_contents( $dropin, $code . "// stale\n" ) > 0, 'Simulate a stale drop-in' );
+        Early::maybeUpgrade( $settings );
+        expect_same( $code, file_get_contents( $dropin ), 'maybeUpgrade rewrites a drop-in that no longer matches the settings' );
+        Early::maybeUpgrade( array_replace( $settings, [ 'exclude_cookies' => "another_session_*\n" ] ) );
+        expect_same( true, str_contains( (string) file_get_contents( $dropin ), "'another_session_'" ), 'A settings change reaches the drop-in without a manual save' );
+        Early::maybeUpgrade( $settings );
+
         expect_same( true, Early::sync( array_replace( $settings, [ 'early' => false ] ) ), 'Turning the early setting off detaches' );
         expect_same( false, Early::owned(), 'No owned reader remains when early serving is off' );
         $thirdParty = "<?php\n// Another plugin owns this fixture.\n";

@@ -169,6 +169,10 @@ namespace {
         // 預載、失效收集與 CDN 佇列各有自己的測試；這裡只記錄寫入端如何呼叫它們。
         final class FixturePreload {
             public static function register(): void {}
+            // 測試中只有簽章值 fixture 視為有效的預載請求。
+            public static function isPreloadRequest(): bool {
+                return ( $_SERVER['HTTP_X_YS_CACHE_PRELOAD'] ?? '' ) === 'fixture';
+            }
         }
         class_alias( FixturePreload::class, 'YangSheep\Cache\YSCachePreload' );
         final class FixtureInvalidation {
@@ -534,6 +538,12 @@ namespace {
         }
         expect_same( true, $ready, 'Start the PHP built-in server' );
         expect_same( [ 'synced' => true ], json_decode( $fetch( '/__setup/' )['body'], true ), 'Attach the early reader' );
+        // 清除（含接上讀取器時的新世代）之後，同一秒內開始的請求可能讀到清除前的設定，寫入端會拒絕；等到下一秒再測寫入。
+        $nextSecond = static function (): void {
+            $now = microtime( true );
+            usleep( (int) ( ( floor( $now ) + 1 - $now ) * 1000000 ) + 20000 );
+        };
+        $nextSecond();
 
         // 乾淨請求：MISS 時寫入，下一次由早期讀取器直接送出。
         $miss = $fetch( '/clean/' );
@@ -657,6 +667,12 @@ namespace {
         expect_same( '', $header( $preload, 'x-ys-cache-early' ), 'The reader leaves preload requests to WordPress' );
         expect_same( 'MISS', $header( $preload, 'x-ys-cache' ), 'A preload render is a candidate' );
         expect_same( 'HIT', $header( $fetch( '/preloaded/' ), 'x-ys-cache' ), 'Visitors receive the preloaded page' );
+        $forged = $fetch( '/forged-preload/', [ 'X-YS-Cache-Preload: forged' ] );
+        expect_same( '', $header( $forged, 'x-ys-cache-early' ), 'A forged preload header still skips the reader' );
+        expect_same( null, $stored( '/forged-preload/' ), 'A forged preload header cannot write or overwrite shared entries' );
+        $upper = $fetch( '/Clean-Upper/' );
+        expect_same( 200, $upper['status'], 'Mixed-case aliases still render' );
+        expect_same( null, $stored( '/Clean-Upper/' ), 'Mixed-case aliases are not stored as separate copies' );
 
         // 範圍清除：本機頁面同步清除並通知預載，CDN 照舊排入佇列。
         $fetch( '/stock-item/' );
@@ -665,6 +681,7 @@ namespace {
         expect_same( 'ok', $fetch( '/__stock/' )['body'], 'Run a scoped purge' );
         expect_same( "purged /stock-item/\nstock https://" . FIXTURE_HOST . "/stock-item/\n", (string) @file_get_contents( $root . '/events.log' ), 'Clear the page now, notify the preloader, then queue CDN work' );
         expect_same( null, $stored( '/stock-item/' ), 'The scoped purge removed the early entry immediately' );
+        $nextSecond();
         expect_same( 'MISS', $header( $fetch( '/stock-item/' ), 'x-ys-cache' ), 'The next visitor renders fresh content' );
         @unlink( $root . '/events.log' );
         $worker = json_decode( $fetch( '/__purge-stock/' )['body'], true );
@@ -681,6 +698,7 @@ namespace {
         // 設定：新欄位、停用的舊欄位，以及儲存後同步讀取器設定。
         expect_same( [ 'saved' => true, 'early' => true, 'serve_cart_visitors' => false, 'preload' => false, 'ignore_params' => "campaign_ref\npartner",
             'early_paths' => '', 'early_pixel_shell' => false, 'guest_template' => false ], json_decode( $fetch( '/__save/' )['body'], true ), 'Sanitize and save the 0.2 settings' );
+        $nextSecond();
         expect_same( 'MISS', $header( $fetch( '/clean/' ), 'x-ys-cache' ), 'Saving settings clears the early cache' );
         expect_same( 'HIT', $header( $fetch( '/clean/?campaign_ref=spring' ), 'x-ys-cache' ), 'The reader honors the newly ignored parameter' );
 

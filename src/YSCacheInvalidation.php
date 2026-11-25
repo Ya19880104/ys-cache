@@ -8,8 +8,9 @@ defined( 'ABSPATH' ) || exit;
  * 內容變更時決定清除範圍。
  *
  * - 文章、商品、圖片、變體、價格與縮圖 meta、留言、分類關係：只清受影響的網址（本身與變更前網址、首頁、
- *   彙整與商店頁、所屬公開分類與上層、文章的作者與日期彙整）。
- * - 選單、小工具、佈景、範本、外觀選項、分類 term 本身、折扣規則等版面共用內容：清除全站。
+ *   彙整與商店頁、所屬公開分類與上層、文章的作者與日期彙整）。圖片另清把它當成精選圖片、商品相簿或分類縮圖的頁面。
+ * - 選單、小工具、佈景、範本、外觀選項、分類 term 本身、折扣規則、WooCommerce 設定與商品排序等版面共用內容：清除全站。
+ * - 被選單、商店頁、首頁、文章頁或子頁面引用的文章，標題、網址或公開狀態改變時也清除全站；只改內容仍只清相關網址。
  * - 請求期間只收集，shutdown 時一次送出；同時有全站清除時以全站為準，網址超過 300 個也改為全站清除。
  */
 final class YSCacheInvalidation {
@@ -36,8 +37,27 @@ final class YSCacheInvalidation {
         'show_on_front', 'sidebars_widgets', 'site_icon', 'siteurl', 'sticky_posts', 'tag_base',
         'time_format', 'timezone_string', 'gmt_offset', 'WPLANG', 'wpcf7',
     ];
+    /** WooCommerce 影響所有商店頁面的設定：網址結構、稅金與價格顯示、缺貨隱藏、商店公告。 */
+    private const WOO_OPTIONS = [
+        'woocommerce_permalinks', 'woocommerce_calc_taxes', 'woocommerce_prices_include_tax', 'woocommerce_tax_display_shop',
+        'woocommerce_hide_out_of_stock_items', 'woocommerce_currency', 'woocommerce_currency_pos', 'woocommerce_price_num_decimals',
+        'woocommerce_price_decimal_sep', 'woocommerce_price_thousand_sep', 'woocommerce_demo_store', 'woocommerce_demo_store_notice',
+    ];
+    /**
+     * TranslatePress 會改變輸出的設定。翻譯過程中寫入的計數、紀錄與錯誤選項（trp_machine_translated_characters、
+     * trp_machine_translation_settings、trp_db_stored_data 等）不列入，避免一般瀏覽觸發全站清除。
+     */
+    private const TRANSLATEPRESS_OPTIONS = [
+        'trp_settings', 'trp_advanced_settings', 'trp_language_switcher_settings', 'trp_add_ons_settings', 'trp_ald_settings',
+    ];
+    /** 庫存與銷量欄位：Woo CRUD 儲存只改這些欄位時（結帳扣庫存、庫存同步）交給庫存 hook，不當成內容變更。 */
+    private const WOO_STOCK_PROPS = [ 'stock_quantity', 'stock_status', 'low_stock_amount', 'total_sales' ];
+    /** 會改變引用頁面輸出的圖片 meta（檔案、尺寸、替代文字）：引用這張圖片的頁面都要清除。 */
+    private const ATTACHMENT_FILE_META = [ '_wp_attached_file', '_wp_attachment_metadata', '_wp_attachment_image_alt' ];
     /** 一次請求最多逐頁清除的網址數，超過就改為全站清除。 */
     private const MAX_URLS = 300;
+    /** 一張圖片最多逐頁清除的引用文章或分類數，超過就改為全站清除。 */
+    private const MAX_REFERENCES = 100;
     /** Woo Discount Rules 後台 AJAX（wdr_ajax）中會改變規則的方法。 */
     private const DISCOUNT_RULE_METHODS = '/save|status|delete|duplicate|import|bulk/i';
 
@@ -52,6 +72,12 @@ final class YSCacheInvalidation {
     private array $terms = [];
     private array $stockProducts = [];
     private array $deferredPriceWrites = [];
+    /** 文章 ID => 是否被全站引用（資料庫查詢結果，同一次請求只查一次）。 */
+    private array $siteWide = [];
+    /** 已查過引用頁面的圖片 ID。 */
+    private array $attachments = [];
+    /** Woo CRUD 儲存前記下的變更欄位：商品或變體 ID => 欄位名稱。 */
+    private array $wooChanges = [];
     private bool $dirty = false;
     private bool $flushed = false;
 
@@ -70,11 +96,11 @@ final class YSCacheInvalidation {
         add_action( 'wp_after_insert_post', [ $this, 'postSaved' ], 10, 4 );
         add_action( 'transition_post_status', [ $this, 'postStatusChanged' ], 10, 3 );
         add_action( 'before_delete_post', [ $this, 'postDeleting' ], 10, 2 );
-        add_action( 'delete_attachment', [ $this, 'postDeleting' ], 10, 2 );
+        add_action( 'delete_attachment', [ $this, 'attachmentDeleting' ], 10, 2 );
         add_action( 'deleted_post', [ $this, 'postDeleting' ], 10, 2 );
 
         foreach ( [ 'added_post_meta', 'updated_post_meta', 'deleted_post_meta' ] as $hook ) {
-            add_action( $hook, [ $this, 'postMetaChanged' ], 10, 3 );
+            add_action( $hook, [ $this, 'postMetaChanged' ], 10, 4 );
         }
         foreach ( [ 'created_term', 'edited_term', 'delete_term' ] as $hook ) {
             add_action( $hook, [ $this, 'termChanged' ], 10, 3 );
@@ -101,6 +127,11 @@ final class YSCacheInvalidation {
             add_action( $hook, [ $this, 'wooAvailabilityChanged' ] );
         }
         add_action( 'woocommerce_updated_product_price', [ $this, 'wooParentPricesSynced' ] );
+        // Woo CRUD 只改 meta 時（REST API、CSV 匯入）不會呼叫 wp_update_post()，文章 hook 不會觸發。
+        add_action( 'woocommerce_before_product_object_save', [ $this, 'wooProductSaving' ] );
+        foreach ( [ 'woocommerce_new_product', 'woocommerce_update_product', 'woocommerce_update_product_variation' ] as $hook ) {
+            add_action( $hook, [ $this, 'wooProductSaved' ] );
+        }
         add_action( 'ys_ec_product_saved', [ $this, 'ysCartProductSaved' ], 10, 3 );
         foreach ( [
             'switch_theme', 'customize_save_after', 'wp_update_nav_menu', 'wp_update_nav_menu_item',
@@ -111,6 +142,8 @@ final class YSCacheInvalidation {
             'ys_ec_product_auto_unpublished', 'ys_ec_category_saved', 'ys_ec_category_deleted',
             'advanced_woo_discount_rules_after_save_rule', 'advanced_woo_discount_rules_after_delete_rule',
             'advanced_woo_discount_rules_after_delete_rules', 'elementor/core/files/clear_cache',
+            // WooCommerce 設定頁儲存、商品拖曳排序（直接改 menu_order，不經文章 hook）。
+            'woocommerce_settings_saved', 'woocommerce_after_product_ordering', 'woocommerce_after_single_product_ordering',
         ] as $hook ) {
             add_action( $hook, [ $this, 'mark' ], 10, 0 );
         }
@@ -132,8 +165,7 @@ final class YSCacheInvalidation {
             return;
         }
         $this->flushed = true;
-        // 每篇文章至少有自己的網址：大量變更（批次編輯、匯入）直接清除全站，不必逐篇計算。
-        if ( $this->dirty || count( $this->posts ) + count( $this->deferredPriceWrites ) > self::MAX_URLS ) {
+        if ( $this->globalPending() ) {
             ( $this->invalidate )();
             return;
         }
@@ -148,6 +180,14 @@ final class YSCacheInvalidation {
             return;
         }
         ( $this->invalidatePages )( $urls, $content );
+    }
+
+    /**
+     * 已確定清除全站：明確要求，或變更的文章多到不必逐篇計算（每篇文章至少有自己的網址，批次編輯、匯入直接清除全站）。
+     * 這時也不必再查詢個別引用。
+     */
+    private function globalPending(): bool {
+        return $this->dirty || count( $this->posts ) + count( $this->deferredPriceWrites ) > self::MAX_URLS;
     }
 
     /** 彙整這次請求要清除的網址（去除重複、保留順序）。 */
@@ -246,6 +286,16 @@ final class YSCacheInvalidation {
         return $urls;
     }
 
+    /** 分類縮圖會出現在該分類（含上層）、首頁與商店頁。 */
+    private static function termThumbnailUrls( \WP_Term $term ): array {
+        $urls = self::termUrls( $term );
+        $urls[] = home_url( '/' );
+        if ( function_exists( 'wc_get_page_permalink' ) ) {
+            $urls[] = wc_get_page_permalink( 'shop' );
+        }
+        return $urls;
+    }
+
     private function isGlobalType( string $type ): bool {
         $this->globalTypes ??= array_values( array_filter(
             (array) apply_filters( 'ys_cache_global_post_types', self::GLOBAL_POST_TYPES ), 'is_string'
@@ -292,6 +342,61 @@ final class YSCacheInvalidation {
         $this->posts[ (int) $post->ID ] = true;
     }
 
+    /** 標題、網址或公開狀態改變：文章被全站引用時改為清除全站。 */
+    private function markIfReferenced( \WP_Post $post ): void {
+        if ( ! $this->globalPending() && $this->referencedSiteWide( $post ) ) {
+            $this->mark();
+        }
+    }
+
+    /**
+     * 文章是否被全站引用：有已發佈的選單項目連到它；它是商店頁、首頁或文章頁；或它是有已發佈子頁面的上層頁面。
+     * 選單文字與連結、麵包屑、子頁面網址（含上層 slug）會出現在所有頁面。可用 ys_cache_post_is_global 擴充（例如頁尾固定連結）。
+     */
+    private function referencedSiteWide( \WP_Post $post ): bool {
+        $id = (int) $post->ID;
+        $this->siteWide[ $id ] ??= $id > 0
+            && ( in_array( $id, self::sitePageIds(), true ) || self::inNavMenu( $id ) || self::hasPublishedChildren( $post ) );
+        return (bool) apply_filters( 'ys_cache_post_is_global', $this->siteWide[ $id ], $post );
+    }
+
+    /** 首頁、文章頁與 WooCommerce 商店頁的 ID。 */
+    private static function sitePageIds(): array {
+        $ids = [ (int) get_option( 'page_on_front' ), (int) get_option( 'page_for_posts' ) ];
+        if ( function_exists( 'wc_get_page_id' ) ) {
+            $ids[] = (int) wc_get_page_id( 'shop' );
+        }
+        return array_values( array_filter( $ids, static fn ( int $id ): bool => $id > 0 ) );
+    }
+
+    /** 是否有已發佈的選單項目（_menu_item_type 為 post_type）連到這篇文章。 */
+    private static function inNavMenu( int $postId ): bool {
+        global $wpdb;
+        if ( ! isset( $wpdb ) || ! is_object( $wpdb ) ) {
+            return false;
+        }
+        return (bool) $wpdb->get_var( $wpdb->prepare(
+            "SELECT i.ID FROM {$wpdb->posts} i
+            INNER JOIN {$wpdb->postmeta} t ON t.post_id = i.ID AND t.meta_key = '_menu_item_type' AND t.meta_value = 'post_type'
+            INNER JOIN {$wpdb->postmeta} o ON o.post_id = i.ID AND o.meta_key = '_menu_item_object_id' AND o.meta_value = %s
+            WHERE i.post_type = 'nav_menu_item' AND i.post_status = 'publish' LIMIT 1",
+            (string) $postId
+        ) );
+    }
+
+    /** 階層式類型（頁面）是否有已發佈的子頁面。 */
+    private static function hasPublishedChildren( \WP_Post $post ): bool {
+        global $wpdb;
+        if ( ! is_post_type_hierarchical( $post->post_type ) || ! isset( $wpdb ) || ! is_object( $wpdb ) ) {
+            return false;
+        }
+        return (bool) $wpdb->get_var( $wpdb->prepare(
+            "SELECT ID FROM {$wpdb->posts} WHERE post_parent = %d AND post_type = %s AND post_status = 'publish' LIMIT 1",
+            (int) $post->ID,
+            $post->post_type
+        ) );
+    }
+
     /** 更新寫入資料庫前：網址即將改變或文章即將下架時，記下變更前的網址與所屬分類。 */
     public function postUpdating( $postId, $data ): void {
         $before = get_post( (int) $postId );
@@ -299,10 +404,14 @@ final class YSCacheInvalidation {
             return;
         }
         $status = is_string( $data['post_status'] ?? null ) ? $data['post_status'] : $before->post_status;
-        if ( (string) ( $data['post_name'] ?? $before->post_name ) !== (string) $before->post_name
+        $moved = (string) ( $data['post_name'] ?? $before->post_name ) !== (string) $before->post_name
             || (int) ( $data['post_parent'] ?? $before->post_parent ) !== (int) $before->post_parent
-            || ! $this->publicPost( $before, $status ) ) {
+            || ! $this->publicPost( $before, $status );
+        if ( $moved ) {
             $this->addUrls( self::postUrls( $before ) );
+        }
+        if ( $moved || (string) ( $data['post_title'] ?? $before->post_title ) !== (string) $before->post_title ) {
+            $this->markIfReferenced( $before );
         }
     }
 
@@ -315,10 +424,16 @@ final class YSCacheInvalidation {
         if ( ! $public && ! $wasPublic ) {
             return;
         }
+        $moved = $before instanceof \WP_Post && ( (string) $before->post_name !== (string) $post->post_name
+            || (int) $before->post_parent !== (int) $post->post_parent );
         // 後備：沒有經過 pre_post_update 的更新也要清除舊網址。
-        if ( $wasPublic && $this->ownAddress( $before ) && ( ! $public || (string) $before->post_name !== (string) $post->post_name
-            || (int) $before->post_parent !== (int) $post->post_parent ) ) {
+        if ( $wasPublic && $this->ownAddress( $before ) && ( ! $public || $moved ) ) {
             $this->addUrls( self::postUrls( $before ) );
+        }
+        // 新文章不會已被引用；更新時標題、網址或公開狀態改變才查詢（例如草稿發佈、排程文章上線）。
+        if ( $before instanceof \WP_Post && $this->ownAddress( $post )
+            && ( $moved || $public !== $wasPublic || (string) $before->post_title !== (string) $post->post_title ) ) {
+            $this->markIfReferenced( $post );
         }
         $this->postChanged( $post );
     }
@@ -345,12 +460,68 @@ final class YSCacheInvalidation {
         $this->postChanged( $post );
     }
 
-    public function postMetaChanged( $metaId, $postId, $key ): void {
+    /** 刪除圖片：核心在 delete_attachment 之後才移除 meta，先查出引用它的頁面，再沿用上層文章的規則。 */
+    public function attachmentDeleting( $id, $post = null ): void {
+        $post = $post instanceof \WP_Post ? $post : get_post( (int) $id );
+        if ( $post instanceof \WP_Post && $post->post_type === 'attachment' ) {
+            $this->attachmentReferencesChanged( $post );
+        }
+        $this->postDeleting( $id, $post );
+    }
+
+    /**
+     * 圖片檔案或尺寸改變、圖片被刪除：清除把它當成精選圖片、商品相簿或分類縮圖的頁面（媒體庫圖片不一定有公開的上層文章）。
+     * 文章與分類各超過 100 筆時改為清除全站；同一張圖片在一次請求中只查詢一次。找不到引用時不做其他處理。
+     */
+    private function attachmentReferencesChanged( \WP_Post $attachment ): void {
+        global $wpdb;
+        $id = (int) $attachment->ID;
+        if ( $id <= 0 || isset( $this->attachments[ $id ] ) || $this->globalPending() || ! isset( $wpdb ) || ! is_object( $wpdb ) ) {
+            return;
+        }
+        $this->attachments[ $id ] = true;
+        $limit = self::MAX_REFERENCES + 1;
+        $postIds = $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT post_id FROM {$wpdb->postmeta}
+            WHERE ( meta_key = '_thumbnail_id' AND meta_value = %s )
+                OR ( meta_key = '_product_image_gallery' AND FIND_IN_SET( %s, meta_value ) )
+            LIMIT %d",
+            (string) $id,
+            (string) $id,
+            $limit
+        ) );
+        $termIds = $wpdb->get_col( $wpdb->prepare(
+            "SELECT DISTINCT term_id FROM {$wpdb->termmeta} WHERE meta_key = 'thumbnail_id' AND meta_value = %s LIMIT %d",
+            (string) $id,
+            $limit
+        ) );
+        $postIds = is_array( $postIds ) ? $postIds : [];
+        $termIds = is_array( $termIds ) ? $termIds : [];
+        if ( count( $postIds ) > self::MAX_REFERENCES || count( $termIds ) > self::MAX_REFERENCES ) {
+            $this->mark();
+            return;
+        }
+        foreach ( $postIds as $postId ) {
+            $post = (int) $postId !== $id ? get_post( (int) $postId ) : null;
+            if ( $post instanceof \WP_Post && $this->publicPost( $post ) ) {
+                $this->postChanged( $post );
+            }
+        }
+        foreach ( $termIds as $termId ) {
+            $term = get_term( (int) $termId );
+            if ( $term instanceof \WP_Term && is_taxonomy_viewable( $term->taxonomy ) ) {
+                $this->addUrls( self::termThumbnailUrls( $term ) );
+            }
+        }
+    }
+
+    public function postMetaChanged( $metaId, $postId, $key, $value = null ): void {
         $postId = (int) $postId;
         $key = (string) $key;
         if ( $postId <= 0 ) {
-            // 刪除圖片時核心一次移除所有文章的精選圖片（object_id 為 0），無法得知是哪些文章。
-            if ( $key === '_thumbnail_id' && ! empty( $metaId ) ) {
+            // 刪除圖片時核心一次移除所有文章的精選圖片（object_id 為 0，$value 為圖片 ID）。delete_attachment 已查出
+            // 引用的文章時只清那些文章；否則無法得知是哪些文章，清除全站。
+            if ( $key === '_thumbnail_id' && ! empty( $metaId ) && ! ( is_numeric( $value ) && isset( $this->attachments[ (int) $value ] ) ) ) {
                 $this->mark();
             }
             return;
@@ -370,6 +541,9 @@ final class YSCacheInvalidation {
         }
         if ( apply_filters( 'ys_cache_rendered_post_meta', in_array( $key, self::RENDERED_POST_META, true ), $key, $post ) ) {
             $this->postChanged( $post );
+            if ( $post->post_type === 'attachment' && in_array( $key, self::ATTACHMENT_FILE_META, true ) ) {
+                $this->attachmentReferencesChanged( $post );
+            }
         }
     }
 
@@ -388,6 +562,30 @@ final class YSCacheInvalidation {
 
     public function wooParentPricesSynced( $productId ): void {
         unset( $this->deferredPriceWrites[ (int) $productId ] );
+    }
+
+    /** Woo CRUD 儲存前記下變更的欄位（儲存完成後 get_changes() 已清空）。新商品還沒有 ID，一律視為內容變更。 */
+    public function wooProductSaving( $product ): void {
+        if ( $product instanceof \WC_Product && $product->get_id() > 0 ) {
+            $this->wooChanges[ $product->get_id() ] = array_keys( $product->get_changes() );
+        }
+    }
+
+    /**
+     * Woo CRUD 儲存完成（新增、更新商品或變體）：比照一般商品儲存清除商品的相關網址，變體清所屬商品。
+     * wc_update_product_stock() 扣庫存時也會儲存商品：只改庫存與銷量欄位的儲存交給庫存 hook，維持庫存範圍。
+     */
+    public function wooProductSaved( $productId ): void {
+        $productId = (int) $productId;
+        $changes = $this->wooChanges[ $productId ] ?? null;
+        unset( $this->wooChanges[ $productId ] );
+        if ( $productId <= 0 || ( $changes !== null && ! array_diff( $changes, self::WOO_STOCK_PROPS ) ) ) {
+            return;
+        }
+        $post = get_post( $productId );
+        if ( $post instanceof \WP_Post && $this->publicPost( $post ) ) {
+            $this->postChanged( $post );
+        }
     }
 
     private function markWooStock( ?\WP_Post $post, bool $availability ): void {
@@ -472,12 +670,7 @@ final class YSCacheInvalidation {
         $term = get_term( (int) $termId );
         if ( $term instanceof \WP_Term && is_taxonomy_viewable( $term->taxonomy ) &&
             apply_filters( 'ys_cache_rendered_term_meta', $key === 'thumbnail_id', $key, $term ) ) {
-            $urls = self::termUrls( $term );
-            $urls[] = home_url( '/' );
-            if ( function_exists( 'wc_get_page_permalink' ) ) {
-                $urls[] = wc_get_page_permalink( 'shop' );
-            }
-            $this->addUrls( $urls );
+            $this->addUrls( self::termThumbnailUrls( $term ) );
         }
     }
 
@@ -508,8 +701,9 @@ final class YSCacheInvalidation {
     }
 
     public function optionChanged( $option ): void {
-        if ( is_string( $option ) && ( preg_match( '/^(?:theme_mods_|widget_|trp_|ys_trp_|ys_tp_|ys_ec_page_|woocommerce_(?:cart|checkout|myaccount|shop)_page_id$)/', $option ) ||
-            in_array( $option, self::APPEARANCE_OPTIONS, true ) ) ) {
+        if ( is_string( $option ) && ( preg_match( '/^(?:theme_mods_|widget_|ys_trp_|ys_tp_|ys_ec_page_|woocommerce_(?:cart|checkout|myaccount|shop)_page_id$)/', $option ) ||
+            in_array( $option, self::APPEARANCE_OPTIONS, true ) || in_array( $option, self::WOO_OPTIONS, true )
+            || in_array( $option, self::TRANSLATEPRESS_OPTIONS, true ) ) ) {
             $this->mark();
         }
     }

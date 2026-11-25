@@ -16,7 +16,8 @@ final class WP_Post {
         public int $post_parent = 0,
         public string $post_name = '',
         public int $post_author = 0,
-        public string $post_date = '0000-00-00 00:00:00'
+        public string $post_date = '0000-00-00 00:00:00',
+        public string $post_title = ''
     ) {}
 }
 
@@ -29,10 +30,57 @@ final class WP_Term {
 }
 
 final class WC_Product {
-    public function __construct( private int $id ) {}
+    public function __construct( private int $id, private array $changes = [] ) {}
 
     public function get_id(): int {
         return $this->id;
+    }
+
+    /** 儲存前尚未寫入的欄位變更（woocommerce_before_product_object_save 時仍可取得）。 */
+    public function get_changes(): array {
+        return $this->changes;
+    }
+}
+
+/** $wpdb 替身：把 prepare() 的參數代入查詢、記錄每次查詢，依查詢種類回傳 $GLOBALS['db'] 的資料；沒有 LIMIT 的查詢直接失敗。 */
+final class FixtureDb {
+    public string $posts = 'wp_posts';
+    public string $postmeta = 'wp_postmeta';
+    public string $termmeta = 'wp_termmeta';
+
+    public function prepare( string $query, ...$args ): string {
+        return preg_replace_callback( '/%[sd]/', static function ( array $placeholder ) use ( &$args ): string {
+            $value = array_shift( $args );
+            return $placeholder[0] === '%d' ? (string) (int) $value : "'" . addslashes( (string) $value ) . "'";
+        }, (string) preg_replace( '/\s+/', ' ', trim( $query ) ) );
+    }
+
+    public function get_var( string $query ): ?string {
+        return $this->rows( $query )[0] ?? null;
+    }
+
+    public function get_col( string $query ): array {
+        return $this->rows( $query );
+    }
+
+    private function rows( string $query ): array {
+        $GLOBALS['queries'][] = $query;
+        $db = $GLOBALS['db'];
+        if ( ! preg_match( '/ LIMIT (\d+)$/', $query, $limit ) ) {
+            throw new RuntimeException( 'Unbounded query: ' . $query );
+        }
+        if ( preg_match( "/^SELECT i\.ID FROM wp_posts i INNER JOIN wp_postmeta t ON t\.post_id = i\.ID AND t\.meta_key = '_menu_item_type' AND t\.meta_value = 'post_type' INNER JOIN wp_postmeta o ON o\.post_id = i\.ID AND o\.meta_key = '_menu_item_object_id' AND o\.meta_value = '(\d+)' WHERE i\.post_type = 'nav_menu_item' AND i\.post_status = 'publish' LIMIT 1$/", $query, $match ) ) {
+            $rows = in_array( (int) $match[1], $db['menu'] ?? [], true ) ? [ 900 ] : [];
+        } elseif ( preg_match( "/^SELECT ID FROM wp_posts WHERE post_parent = (\d+) AND post_type = 'page' AND post_status = 'publish' LIMIT 1$/", $query, $match ) ) {
+            $rows = $db['children'][ (int) $match[1] ] ?? [];
+        } elseif ( preg_match( "/^SELECT DISTINCT post_id FROM wp_postmeta WHERE \( meta_key = '_thumbnail_id' AND meta_value = '(\d+)' \) OR \( meta_key = '_product_image_gallery' AND FIND_IN_SET\( '(\d+)', meta_value \) \) LIMIT \d+$/", $query, $match ) && $match[1] === $match[2] ) {
+            $rows = array_values( array_unique( array_merge( $db['thumbnails'][ (int) $match[1] ] ?? [], $db['galleries'][ (int) $match[1] ] ?? [] ) ) );
+        } elseif ( preg_match( "/^SELECT DISTINCT term_id FROM wp_termmeta WHERE meta_key = 'thumbnail_id' AND meta_value = '(\d+)' LIMIT \d+$/", $query, $match ) ) {
+            $rows = $db['term_thumbnails'][ (int) $match[1] ] ?? [];
+        } else {
+            throw new RuntimeException( 'Unexpected query: ' . $query );
+        }
+        return array_map( 'strval', array_slice( $rows, 0, (int) $limit[1] ) );
     }
 }
 
@@ -73,6 +121,10 @@ function is_post_type_viewable( object $type ): bool {
 
 function is_post_status_viewable( string $status ): bool {
     return $status === 'publish';
+}
+
+function is_post_type_hierarchical( string $type ): bool {
+    return $type === 'page';
 }
 
 function get_comment( int $id ): ?WP_Comment {
@@ -127,6 +179,10 @@ function wc_get_page_permalink( string $page ): string {
     return home_url( '/' . $page . '/' );
 }
 
+function wc_get_page_id( string $page ): int {
+    return (int) ( $GLOBALS['options'][ 'woocommerce_' . $page . '_page_id' ] ?? -1 );
+}
+
 function get_permalink( int|WP_Post $post ): string|false {
     $GLOBALS['permalink_calls'] = ( $GLOBALS['permalink_calls'] ?? 0 ) + 1;
     $post = $post instanceof WP_Post ? $post : ( $GLOBALS['posts'][ $post ] ?? null );
@@ -153,7 +209,7 @@ function get_post_type_archive_link( string $type ): string|false {
 }
 
 function get_option( string $name, $default = false ) {
-    return $name === 'page_for_posts' ? 30 : $default;
+    return $GLOBALS['options'][ $name ] ?? $default;
 }
 
 function get_author_posts_url( int $author ): string {
@@ -211,7 +267,7 @@ function assert_count( int $expected, string $context ): void {
 function request( bool $scoped = true ): void {
     $GLOBALS['actions'] = $GLOBALS['action_stack'] = [];
     $GLOBALS['purges'] = 0;
-    $GLOBALS['scoped_purges'] = $GLOBALS['scoped_content'] = $GLOBALS['catalog_term_queries'] = [];
+    $GLOBALS['scoped_purges'] = $GLOBALS['scoped_content'] = $GLOBALS['catalog_term_queries'] = $GLOBALS['queries'] = [];
     $GLOBALS['filter_overrides'] = [];
     $GLOBALS['can_manage'] = false;
     $_POST = [];
@@ -298,9 +354,16 @@ $header = new WP_Post( 25, 'elementor_library', 'publish', 0, 'header' );
 $layout = new WP_Post( 26, 'my_layout', 'publish', 0, 'promo' );
 $blog = new WP_Post( 30, 'page', 'publish', 0, 'blog' );
 $menuItem = new WP_Post( 40, 'nav_menu_item', 'publish' );
+$retitled = new WP_Post( 10, 'page', 'publish', 0, 'about', post_title: 'About us' );
+$trashedPage = new WP_Post( 10, 'page', 'trash', 0, 'about__trashed' );
 $fixturePosts = [ 10 => $page, 11 => $scheduled, 12 => $news, 16 => $private, 17 => $order, 18 => $media, 20 => $productImage, 21 => $product,
     22 => $variation, 23 => $privateVariation, 24 => $productDraft, 25 => $header, 26 => $layout, 30 => $blog, 40 => $menuItem ];
 $GLOBALS['posts'] = $fixturePosts;
+$fixtureOptions = [ 'page_for_posts' => 30 ];
+$GLOBALS['options'] = $fixtureOptions;
+// 選單項目（menu）、子頁面（children）與圖片引用（thumbnails、galleries、term_thumbnails）；預設都沒有。
+$GLOBALS['db'] = [];
+$GLOBALS['wpdb'] = new FixtureDb();
 $productUrl = home_url( '/product/linen-shirt/' );
 $GLOBALS['comments'] = [
     1 => new WP_Comment( 10, '1' ),
@@ -349,6 +412,32 @@ expect_global( 'elementor/core/files/clear_cache' );
 // 刪除圖片時核心以 object_id 0 一次移除所有使用它的精選圖片。
 expect_global( 'deleted_post_meta', [ 81, 82 ], 0, '_thumbnail_id', 20 );
 expect_nothing( 'deleted_post_meta', [ 83 ], 0, '_product_image_gallery', 20 );
+
+// WooCommerce 設定頁儲存、商品拖曳排序與影響所有商店頁面的選項：清除全站。
+expect_global( 'woocommerce_settings_saved' );
+expect_global( 'woocommerce_after_product_ordering', $product->ID, [ $product->ID => 2 ] );
+expect_global( 'woocommerce_after_single_product_ordering', $product->ID, 2 );
+foreach ( [
+    'woocommerce_permalinks', 'woocommerce_calc_taxes', 'woocommerce_tax_display_shop', 'woocommerce_hide_out_of_stock_items',
+    'woocommerce_price_num_decimals', 'woocommerce_price_decimal_sep', 'woocommerce_price_thousand_sep', 'woocommerce_currency_pos',
+    'woocommerce_demo_store', 'woocommerce_currency', 'woocommerce_demo_store_notice', 'woocommerce_prices_include_tax',
+] as $option ) {
+    expect_global( 'updated_option', $option, 'old', 'new' );
+}
+
+// TranslatePress 翻譯時寫入的計數、紀錄與錯誤不清除任何頁面；改變輸出的設定與 YS 外掛設定清除全站。
+foreach ( [
+    'trp_machine_translated_characters', 'trp_machine_translation_counter', 'trp_machine_translation_settings',
+    'trp_db_stored_data', 'trp_db_errors',
+] as $option ) {
+    expect_nothing( 'updated_option', $option, 1, 2 );
+}
+foreach ( [
+    'trp_settings', 'trp_advanced_settings', 'trp_language_switcher_settings', 'trp_add_ons_settings', 'trp_ald_settings',
+    'ys_trp_settings', 'ys_tp_settings',
+] as $option ) {
+    expect_global( 'updated_option', $option, [], [] );
+}
 
 // Woo Discount Rules 後台 AJAX：只有管理商店的使用者以 POST 改變規則時才清除全站。
 foreach ( [ 'save_rule', 'manage_status', 'delete_rule', 'duplicate_rule', 'import_rules', 'bulk_action' ] as $method ) {
@@ -412,10 +501,56 @@ expect_scoped( $pageUrls, 'deleted_comment', 1, $GLOBALS['comments'][1] );
 // 精選商品（product_visibility 非缺貨）只清該商品的相關網址；缺貨標記沿用庫存範圍。
 expect_scoped( $productUrls, 'added_term_relationship', $product->ID, 102, 'product_visibility' );
 expect_scoped( $availabilityUrls, 'deleted_term_relationships', $product->ID, [ 101, 102 ], 'product_visibility' );
-// 沒有公開上層文章的圖片不清任何頁面。
+// 沒有公開上層文章、也沒有被引用的圖片不清任何頁面。
 expect_nothing( 'deleted_post', $media->ID, $media );
 expect_nothing( 'updated_post_meta', 1, $media->ID, '_wp_attachment_metadata' );
+expect_nothing( 'delete_attachment', $media->ID, $media );
 expect_nothing( 'updated_post_meta', 1, $privateVariation->ID, '_price' );
+
+// 媒體庫圖片被當成精選圖片、商品相簿或分類縮圖：檔案或尺寸改變時清除引用它的公開頁面（草稿商品略過）。
+$GLOBALS['db'] = [
+    'thumbnails' => [ $media->ID => [ $news->ID ] ],
+    'galleries' => [ $media->ID => [ $product->ID, $productDraft->ID ] ],
+    'term_thumbnails' => [ $media->ID => [ 9 ] ],
+];
+$imageUrls = array_values( array_unique( [ ...urls( '/product_cat/9/', '/product_cat/11/', '/', '/shop/' ), ...$newsUrls, ...$productUrls ] ) );
+expect_scoped( $imageUrls, 'updated_post_meta', 1, $media->ID, '_wp_attachment_metadata', [] );
+expect_scoped( $imageUrls, 'updated_post_meta', 1, $media->ID, '_wp_attached_file', '2026/11/shirt.jpg' );
+
+// 刪除時在 delete_attachment 查詢（核心之後才移除 meta）；核心接著一次移除精選圖片 meta 時不再清除全站。
+request();
+fire( 'delete_attachment', $media->ID, $media );
+fire( 'deleted_post_meta', [ 91 ], 0, '_thumbnail_id', $media->ID );
+fire( 'deleted_post_meta', [ 92 ], $media->ID, '_wp_attachment_metadata', [] );
+fire( 'deleted_post', $media->ID, $media );
+fire( 'shutdown' );
+assert_count( 0, 'deleting a referenced library image' );
+assert_scoped( [ $imageUrls ], 'deleting a library image purges the pages that reference it' );
+if ( count( $GLOBALS['queries'] ) !== 2 ) {
+    throw new RuntimeException( 'Image references should be looked up once per request, got ' . json_encode( $GLOBALS['queries'] ) );
+}
+
+// 分類縮圖引用超過 100 筆：改為清除全站。
+$GLOBALS['db'] = [ 'term_thumbnails' => [ $media->ID => range( 3000, 3100 ) ] ];
+expect_global( 'delete_attachment', $media->ID, $media );
+
+// 剛好 100 篇文章引用仍逐頁清除；101 篇改為清除全站。
+foreach ( [ 100 => [ 0, 1 ], 101 => [ 1, 0 ] ] as $count => [ $global, $scopedCalls ] ) {
+    request();
+    $GLOBALS['db'] = [ 'galleries' => [ $media->ID => range( 3000, 2999 + $count ) ] ];
+    for ( $i = 0; $i < $count; $i++ ) {
+        $GLOBALS['posts'][ 3000 + $i ] = new WP_Post( 3000 + $i, 'product', 'publish', 0, 'gallery-' . $i );
+    }
+    fire( 'updated_post_meta', 1, $media->ID, '_wp_attachment_metadata', [] );
+    fire( 'shutdown' );
+    assert_count( $global, $count . ' products use the image' );
+    // 每個商品各一個網址，加上首頁與商店頁。
+    if ( count( $GLOBALS['scoped_purges'] ) !== $scopedCalls || ( $scopedCalls && count( $GLOBALS['scoped_purges'][0] ) !== $count + 2 ) ) {
+        throw new RuntimeException( $count . ' products use the image: unexpected scoped purge ' . count( $GLOBALS['scoped_purges'] ) );
+    }
+}
+$GLOBALS['posts'] = $fixturePosts;
+$GLOBALS['db'] = [];
 
 // 網址變更：在寫入前記下舊網址，舊網址與新網址都清除。
 request();
@@ -426,6 +561,10 @@ fire( 'wp_after_insert_post', $renamed->ID, $renamed, true, $page );
 fire( 'shutdown' );
 assert_count( 0, 'slug change' );
 assert_scoped( [ urls( '/about/', '/', '/about-us/' ) ], 'slug change purges the previous and the new address' );
+// 沒有被全站引用：選單與子頁面各查詢一次，pre_post_update 與儲存後共用結果。
+if ( count( $GLOBALS['queries'] ) !== 2 ) {
+    throw new RuntimeException( 'slug change: expected one menu and one child page lookup, got ' . json_encode( $GLOBALS['queries'] ) );
+}
 $GLOBALS['posts'] = $fixturePosts;
 
 // 下架或移到回收桶：寫入前就記下目前網址與所屬分類（之後網址會變成 ?p= 或 __trashed）。
@@ -446,6 +585,122 @@ fire( 'pre_post_update', $revision->ID, [ 'post_name' => 'x', 'post_status' => '
 fire( 'shutdown' );
 assert_count( 0, 'unchanged address' );
 assert_scoped( [], 'an update that keeps the address waits for the save hooks' );
+
+// 選單連到的頁面改標題、網址、下架或移到回收桶：選單文字與連結出現在所有頁面，清除全站（只查一次選單）。
+$unchanged = [ 'post_title' => '', 'post_name' => 'about', 'post_parent' => 0, 'post_status' => 'publish' ];
+foreach ( [
+    'title' => [ [ 'post_title' => 'About us' ], $retitled ],
+    'slug' => [ [ 'post_name' => 'about-us' ], $renamed ],
+    'unpublish' => [ [ 'post_status' => 'draft' ], $draft ],
+    'trash' => [ [ 'post_status' => 'trash', 'post_name' => 'about__trashed' ], $trashedPage ],
+] as $change => [ $data, $after ] ) {
+    request();
+    $GLOBALS['db']['menu'] = [ $page->ID ];
+    fire( 'pre_post_update', $page->ID, $data + $unchanged );
+    $GLOBALS['posts'][ $page->ID ] = $after;
+    fire( 'transition_post_status', $after->post_status, 'publish', $after );
+    fire( 'wp_after_insert_post', $after->ID, $after, true, $page );
+    fire( 'shutdown' );
+    assert_count( 1, 'menu page ' . $change );
+    assert_scoped( [], 'menu page ' . $change . ' purges the whole site' );
+    if ( count( $GLOBALS['queries'] ) !== 1 ) {
+        throw new RuntimeException( 'menu page ' . $change . ': expected one bounded menu lookup, got ' . json_encode( $GLOBALS['queries'] ) );
+    }
+    $GLOBALS['posts'] = $fixturePosts;
+    $GLOBALS['db'] = [];
+}
+
+// 同一個選單頁面只改內容或 meta：維持逐頁清除，也不查詢引用。
+request();
+$GLOBALS['db']['menu'] = [ $page->ID ];
+fire( 'pre_post_update', $page->ID, [ 'post_content' => 'Updated copy' ] + $unchanged );
+fire( 'wp_after_insert_post', $page->ID, $page, true, $page );
+fire( 'updated_post_meta', 1, $page->ID, '_thumbnail_id', 5 );
+fire( 'shutdown' );
+assert_count( 0, 'content edit of a menu page' );
+assert_scoped( [ $pageUrls ], 'content edit of a menu page stays scoped' );
+if ( $GLOBALS['queries'] !== [] ) {
+    throw new RuntimeException( 'A content edit should not look up site-wide references: ' . json_encode( $GLOBALS['queries'] ) );
+}
+$GLOBALS['db'] = [];
+
+// 首頁、文章頁與 WooCommerce 商店頁改標題：不查詢資料庫即可判斷，清除全站。
+foreach ( [ 'page_on_front', 'page_for_posts', 'woocommerce_shop_page_id' ] as $option ) {
+    request();
+    $GLOBALS['options'][ $option ] = $page->ID;
+    fire( 'pre_post_update', $page->ID, [ 'post_title' => 'About us' ] + $unchanged );
+    fire( 'shutdown' );
+    assert_count( 1, $option . ' renamed' );
+    if ( $GLOBALS['queries'] !== [] ) {
+        throw new RuntimeException( $option . ' should be recognised without a database query.' );
+    }
+    $GLOBALS['options'] = $fixtureOptions;
+}
+
+// 有已發佈子頁面的上層頁面改網址：子頁面網址含上層 slug，清除全站。
+request();
+$GLOBALS['db']['children'][ $page->ID ] = [ 50 ];
+fire( 'pre_post_update', $page->ID, [ 'post_name' => 'about-us' ] + $unchanged );
+fire( 'shutdown' );
+assert_count( 1, 'parent page with published children renamed' );
+$GLOBALS['db'] = [];
+
+// 選單連到的草稿發佈：發佈前不是公開文章，在儲存後比較公開狀態。
+request();
+$GLOBALS['db']['menu'] = [ $page->ID ];
+$GLOBALS['posts'][ $page->ID ] = $draft;
+fire( 'pre_post_update', $page->ID, $unchanged );
+$GLOBALS['posts'][ $page->ID ] = $page;
+fire( 'transition_post_status', 'publish', 'draft', $page );
+fire( 'wp_after_insert_post', $page->ID, $page, true, $draft );
+fire( 'shutdown' );
+assert_count( 1, 'publishing a draft that a menu links to' );
+$GLOBALS['posts'] = $fixturePosts;
+
+// 新建立的文章（沒有變更前的文章）不可能已被引用，不查詢。
+request();
+$GLOBALS['db']['menu'] = [ $page->ID ];
+fire( 'wp_after_insert_post', $page->ID, $page, false, null );
+fire( 'shutdown' );
+assert_count( 0, 'inserting a new post' );
+assert_scoped( [ $pageUrls ], 'a new post stays scoped' );
+if ( $GLOBALS['queries'] !== [] ) {
+    throw new RuntimeException( 'A new post should not look up site-wide references.' );
+}
+$GLOBALS['db'] = [];
+
+// 非階層類型（商品）改標題且沒有被引用：只查選單，維持逐頁清除。
+request();
+$retitledProduct = new WP_Post( $product->ID, 'product', 'publish', 0, 'linen-shirt', post_title: 'Linen shirt' );
+fire( 'pre_post_update', $product->ID, [ 'post_title' => 'Linen shirt', 'post_name' => 'linen-shirt', 'post_parent' => 0, 'post_status' => 'publish' ] );
+$GLOBALS['posts'][ $product->ID ] = $retitledProduct;
+fire( 'wp_after_insert_post', $product->ID, $retitledProduct, true, $product );
+fire( 'shutdown' );
+assert_count( 0, 'product title change without site-wide references' );
+assert_scoped( [ $productUrls ], 'product title change stays scoped' );
+if ( count( $GLOBALS['queries'] ) !== 1 ) {
+    throw new RuntimeException( 'A product title change should only look up menu items once, got ' . json_encode( $GLOBALS['queries'] ) );
+}
+$GLOBALS['posts'] = $fixturePosts;
+
+// ys_cache_post_is_global 可以把其他文章列為全站引用，也可以排除。
+request();
+$GLOBALS['filter_overrides']['ys_cache_post_is_global'] = static fn ( bool $global, WP_Post $post ): bool => $global || $post->ID === 21;
+fire( 'pre_post_update', $product->ID, [ 'post_title' => 'Linen shirt', 'post_name' => 'linen-shirt', 'post_parent' => 0, 'post_status' => 'publish' ] );
+fire( 'shutdown' );
+assert_count( 1, 'ys_cache_post_is_global marks a product as site-wide' );
+
+request();
+$GLOBALS['db']['menu'] = [ $page->ID ];
+$GLOBALS['filter_overrides']['ys_cache_post_is_global'] = static fn (): bool => false;
+fire( 'pre_post_update', $page->ID, [ 'post_title' => 'About us' ] + $unchanged );
+$GLOBALS['posts'][ $page->ID ] = $retitled;
+fire( 'wp_after_insert_post', $retitled->ID, $retitled, true, $page );
+fire( 'shutdown' );
+assert_count( 0, 'ys_cache_post_is_global keeps a menu page scoped' );
+assert_scoped( [ $pageUrls ], 'filtered menu page title change' );
+$GLOBALS['posts'] = $fixturePosts;
+$GLOBALS['db'] = [];
 
 // 超過 300 個網址時改為全站清除；剛好 300 個仍逐頁清除。
 foreach ( [ 299 => [ 0, 1 ], 300 => [ 1, 0 ] ] as $count => [ $global, $scopedCalls ] ) {
@@ -577,6 +832,52 @@ fire( 'shutdown' );
 assert_count( 1, 'duplicate mutations and shutdown' );
 assert_scoped( [], 'a site-wide change subsumes simultaneous stock changes' );
 
+// Woo CRUD 只改 meta（REST API、CSV 匯入）不經 wp_update_post()：比照一般商品儲存清除，變體清所屬商品。
+request();
+fire( 'woocommerce_before_product_object_save', new WC_Product( $product->ID, [ 'sku' => 'LS-01', 'weight' => '0.3' ] ) );
+fire( 'woocommerce_update_product', $product->ID, new WC_Product( $product->ID ) );
+fire( 'shutdown' );
+assert_count( 0, 'meta-only product save' );
+assert_scoped( [ $productUrls ], 'meta-only product save purges the product like a normal save' );
+assert_content( [ true ], 'meta-only product save is a content change' );
+
+request();
+fire( 'woocommerce_before_product_object_save', new WC_Product( $variation->ID, [ 'weight' => '0.3', 'stock_quantity' => 3 ] ) );
+fire( 'woocommerce_update_product_variation', $variation->ID, new WC_Product( $variation->ID ) );
+fire( 'shutdown' );
+assert_count( 0, 'meta-only variation save' );
+assert_scoped( [ $productUrls ], 'meta-only variation save purges its product' );
+assert_content( [ true ], 'a variation save with content fields is a content change' );
+
+expect_scoped( $productUrls, 'woocommerce_new_product', $product->ID, new WC_Product( $product->ID ) );
+
+// wc_update_product_stock() 扣庫存後也會儲存商品（沒有欄位變更）：維持只清商品頁的庫存範圍。
+request();
+fire( 'woocommerce_before_product_object_save', new WC_Product( $product->ID ) );
+fire( 'woocommerce_update_product', $product->ID, new WC_Product( $product->ID ) );
+fire( 'woocommerce_product_set_stock', new WC_Product( $product->ID ) );
+fire( 'shutdown' );
+assert_count( 0, 'checkout stock reduction' );
+assert_scoped( [ [ $productUrl ] ], 'checkout stock reduction purges only the product' );
+assert_content( [ false ], 'checkout stock reduction stays stock-only' );
+
+// REST API 或庫存同步只改數量與狀態，Woo 在 shutdown 同步可變商品的庫存狀態並儲存：維持庫存範圍。
+request();
+fire( 'woocommerce_before_product_object_save', new WC_Product( $variation->ID, [ 'stock_quantity' => 0, 'stock_status' => 'outofstock' ] ) );
+fire( 'updated_post_meta', 5, $variation->ID, '_stock', '0' );
+fire( 'updated_post_meta', 6, $variation->ID, '_stock_status', 'outofstock' );
+fire( 'woocommerce_variation_set_stock', new WC_Product( $variation->ID ) );
+fire( 'woocommerce_variation_set_stock_status', $variation->ID, 'outofstock', new WC_Product( $variation->ID ) );
+fire( 'woocommerce_update_product_variation', $variation->ID, new WC_Product( $variation->ID ) );
+add_action( 'shutdown', static function () use ( $product ): void {
+    fire( 'woocommerce_before_product_object_save', new WC_Product( $product->ID, [ 'stock_status' => 'outofstock' ] ) );
+    fire( 'woocommerce_update_product', $product->ID, new WC_Product( $product->ID ) );
+}, 10, 0 );
+fire( 'shutdown' );
+assert_count( 0, 'stock sync through CRUD saves' );
+assert_scoped( [ $availabilityUrls ], 'stock sync through CRUD saves keeps the availability scope' );
+assert_content( [ false ], 'stock sync through CRUD saves stays stock-only' );
+
 request();
 fire( 'clean_post_cache', $page->ID, $page );
 fire( 'wp_after_insert_post', $draft->ID, $draft, true, $draft );
@@ -604,6 +905,13 @@ fire( 'woocommerce_product_set_stock', new WC_Product( $productDraft->ID ) );
 fire( 'woocommerce_variation_set_stock', new WC_Product( $privateVariation->ID ) );
 fire( 'woocommerce_product_set_stock_status', 0, 'outofstock', new WC_Product( 0 ) );
 fire( 'updated_post_meta', 3, $productDraft->ID, '_stock_status' );
+fire( 'woocommerce_before_product_object_save', new WC_Product( $productDraft->ID, [ 'sku' => 'CS-01' ] ) );
+fire( 'woocommerce_update_product', $productDraft->ID, new WC_Product( $productDraft->ID ) );
+fire( 'woocommerce_before_product_object_save', new WC_Product( $privateVariation->ID, [ 'weight' => '1' ] ) );
+fire( 'woocommerce_update_product_variation', $privateVariation->ID, new WC_Product( $privateVariation->ID ) );
+fire( 'woocommerce_new_product', $productDraft->ID, new WC_Product( $productDraft->ID ) );
+fire( 'updated_option', 'trp_machine_translated_characters', 10, 20 );
+fire( 'updated_option', 'trp_db_stored_data', [], [ 'count' => 1 ] );
 fire( 'shutdown' );
 assert_count( 0, 'unpublished, administrative, view and cart writes' );
 assert_scoped( [], 'unpublished stock and YS CART inventory-only writes' );

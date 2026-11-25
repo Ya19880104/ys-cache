@@ -15,13 +15,14 @@ final class YSCacheEarly {
     private const NONCE_MARGIN = 300;
     private static ?string $directory = null;
     private static ?array $config = null;
+    private static ?bool $storeReady = null;
 
     public static function observeChanges(): void {
         foreach ( [ 'added_option', 'updated_option', 'deleted_option' ] as $hook ) {
             add_action( $hook, static function ( string $option ): void {
                 if ( preg_match( '/^(?:active_plugins$|template$|stylesheet$|home$|siteurl$|blog_public$|'
                     . 'pys_(?:core|facebook|ga|google_ads|consent|pbid_secret)$|xoo-el-|cpfence|'
-                    . 'woocommerce_(?:coming_soon|store_pages_only|cart_page_id|checkout_page_id|myaccount_page_id|default_customer_address|currency)$|'
+                    . 'woocommerce_(?:coming_soon|store_pages_only|cart_page_id|checkout_page_id|myaccount_page_id|default_customer_address|currency|calc_taxes)$|'
                     . 'trp_settings$|ys_tp_settings$)/i', $option ) ) {
                     self::invalidate();
                 }
@@ -36,7 +37,27 @@ final class YSCacheEarly {
             }
         } );
         add_action( 'upgrader_process_complete', static function (): void { self::invalidate(); }, 10, 0 );
-        // 文章上架、下架、改密碼由 YSCacheInvalidation 依範圍清除（含變更前的網址、彙整與分類），這裡不再清全站。
+        // 一般內容編輯由 YSCacheInvalidation 依「自動清除」設定處理；隱藏內容（下架、設為私人、改密碼、刪除）不論設定都要清掉，
+        // 讀取器在 WordPress 載入前送出，不會再檢查文章狀態或密碼。
+        add_action( 'post_updated', static function ( $id, $after, $before ): void {
+            if ( $before instanceof \WP_Post && $after instanceof \WP_Post && $before->post_status === 'publish' &&
+                ( $after->post_status !== 'publish' || $after->post_password !== $before->post_password ) ) {
+                self::invalidateUrl( get_permalink( $before ) );
+            }
+        }, 10, 3 );
+        add_action( 'before_delete_post', static function ( $id, $post = null ): void {
+            $post = $post instanceof \WP_Post ? $post : get_post( (int) $id );
+            if ( $post instanceof \WP_Post && $post->post_status === 'publish' ) {
+                self::invalidateUrl( get_permalink( $post ) );
+            }
+        }, 10, 2 );
+    }
+
+    private static function invalidateUrl( $url ): void {
+        $path = is_string( $url ) ? wp_parse_url( $url, PHP_URL_PATH ) : null;
+        if ( is_string( $path ) && $path !== '' ) {
+            self::invalidate( $path );
+        }
     }
 
     public static function owned(): bool {
@@ -79,7 +100,8 @@ final class YSCacheEarly {
 
     /** 早期讀取器已安裝，且這次請求可以使用寫入端。 */
     public static function active( array $settings ): bool {
-        return self::wanted( $settings ) && self::owned() && self::directory() !== '' && self::host() !== '';
+        // WP_CACHE 關閉時 WordPress 不會載入 drop-in；儲存區不能用時也不能寫入。這兩種情況交還給舊的本機快取。
+        return self::wanted( $settings ) && defined( 'WP_CACHE' ) && WP_CACHE && self::owned() && self::host() !== '' && self::ensureStore();
     }
 
     /** TranslatePress 官方自動偵測會依瀏覽器轉址，同一網址對不同訪客意義不同，不能共用。 */
@@ -181,8 +203,58 @@ final class YSCacheEarly {
         return max( 0, min( $ttl, $cap ) );
     }
 
+    /** 主機安全政策檔（cPFence）的位置；命中時重播的安全標頭必須來自這份政策。 */
+    public static function policyFile(): string {
+        return ( defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins' ) . '/cpfence.php';
+    }
+
+    /** 目前安全政策檔的雜湊（沒有政策檔時為空字串）；寫入端記錄在每份項目裡，讀取器據此判斷項目是否仍適用。 */
+    public static function policyDigest(): string {
+        $file = self::policyFile();
+        $digest = is_file( $file ) ? @hash_file( 'sha256', $file ) : '';
+        return is_string( $digest ) ? $digest : '';
+    }
+
+    /**
+     * 依目前設定產生 drop-in 內容。設定或外掛版本改變時內容不同，maybeUpgrade() 會據此重新同步。
+     * 讀取器檔名與 0.1 版不同：外掛退回舊版時，drop-in 找不到讀取器就直接交回 WordPress，不會以錯誤格式呼叫舊讀取器。
+     */
+    private static function dropinCode( array $settings ): ?string {
+        $reader = realpath( YS_CACHE_DIR . 'templates/early-cache.php' );
+        if ( ! $reader ) {
+            return null;
+        }
+        $config = self::config( $settings, true );
+        $readerConfig = [
+            'directory'        => $config['directory'],
+            'host'             => $config['host'],
+            'deny_cookies'     => $config['deny_cookies'],
+            'deny_agents'      => $config['deny_agents'],
+            'ignore_params'    => $config['ignore_params'],
+            'languages'        => $config['languages'],
+            'language_slugs'   => $config['language_slugs'],
+            'default_language' => $config['default_language'],
+            'policy_file'      => self::policyFile(),
+        ];
+        $file = WP_CONTENT_DIR . '/advanced-cache.php';
+        $restoreEmpty = is_file( $file ) && ( filesize( $file ) === 0 || str_contains( (string) file_get_contents( $file ), "// Restore empty drop-in\n" ) );
+        $version = defined( 'YS_CACHE_VERSION' ) ? (string) YS_CACHE_VERSION : '';
+        return self::MARK . "\n// YS CACHE early cache v4 " . preg_replace( '~[^A-Za-z0-9._-]~', '', $version ) . "\n"
+            . ( $restoreEmpty ? "// Restore empty drop-in\n" : '' )
+            . "if ( ! defined( 'ABSPATH' ) || defined( 'MULTISITE' ) && MULTISITE ) return;\n"
+            . '$ysReader = ' . var_export( $reader, true ) . ";\n"
+            . "if ( ! is_file( \$ysReader ) ) return;\n"
+            . "try {\n"
+            . '    $ysRead = require $ysReader;' . "\n"
+            . '    if ( is_callable( $ysRead ) ) $ysRead( ' . var_export( $readerConfig, true ) . " );\n"
+            . "} catch ( \\Throwable \$ysError ) {\n"
+            . "    // 讀取器與 drop-in 版本不一致或讀取失敗時，交給 WordPress 照常處理。\n"
+            . "}\n";
+    }
+
     public static function sync( array $settings ): bool {
         self::$config = null;
+        self::$storeReady = null;
         if ( ! self::wanted( $settings ) ) {
             return self::remove();
         }
@@ -201,36 +273,10 @@ final class YSCacheEarly {
         if ( ! self::owned() && ! YSCacheEarlyStore::invalidateAll( $directory ) ) {
             return false;
         }
-        $reader = realpath( YS_CACHE_DIR . 'templates/early-reader.php' );
-        if ( ! $reader ) {
+        $code = self::dropinCode( $settings );
+        if ( $code === null ) {
             return false;
         }
-        // 主機可以不經 WordPress 選項直接替換安全政策檔；命中時比對雜湊，確保重播的安全標頭仍然正確。
-        $policy = ( defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins' ) . '/cpfence.php';
-        $digest = is_file( $policy ) ? hash_file( 'sha256', $policy ) : '';
-        if ( $digest === false ) {
-            return false;
-        }
-        $config = self::config( $settings, true );
-        $reader_config = [
-            'directory'     => $config['directory'],
-            'host'          => $config['host'],
-            'deny_cookies'  => $config['deny_cookies'],
-            'deny_agents'   => $config['deny_agents'],
-            'ignore_params' => $config['ignore_params'],
-            'languages'     => $config['languages'],
-            'language_slugs' => $config['language_slugs'],
-            'default_language' => $config['default_language'],
-            'policy_file'   => $policy,
-            'policy_digest' => $digest,
-        ];
-        $restoreEmpty = is_file( $file ) && ( filesize( $file ) === 0 || str_contains( (string) file_get_contents( $file ), "// Restore empty drop-in\n" ) );
-        $code = self::MARK . "\n// YS CACHE early cache v3\n" . ( $restoreEmpty ? "// Restore empty drop-in\n" : '' )
-            . "if ( ! defined( 'ABSPATH' ) || defined( 'MULTISITE' ) && MULTISITE ) return;\n"
-            . '$ysReader = ' . var_export( $reader, true ) . ";\n"
-            . "if ( ! is_file( \$ysReader ) ) return;\n"
-            . '$ysRead = require $ysReader;' . "\n"
-            . 'if ( is_callable( $ysRead ) ) $ysRead( ' . var_export( $reader_config, true ) . " );\n";
         YSCacheEarlyStore::purgeLegacy( $directory );
         if ( self::owned() && file_get_contents( $file ) === $code ) {
             return true;
@@ -261,15 +307,34 @@ final class YSCacheEarly {
         }
     }
 
-    /** 外掛更新後，舊版 drop-in 仍以舊格式呼叫讀取器；偵測到時重新同步一次。 */
+    /**
+     * 每個請求（init）檢查一次：drop-in 內容與目前設定、外掛版本不一致時重新同步（外掛更新、TranslatePress 網址或
+     * 排除規則改變），儲存區不見時重建（tmpfs 的 /tmp 重開機後會清空）。
+     */
     public static function maybeUpgrade( array $settings ): void {
         if ( ! self::owned() ) {
             return;
         }
-        $head = (string) @file_get_contents( WP_CONTENT_DIR . '/advanced-cache.php', false, null, 0, 160 );
-        if ( ! str_contains( $head, '// YS CACHE early cache v3' ) ) {
+        self::ensureStore();
+        $code = self::wanted( $settings ) ? self::dropinCode( $settings ) : null;
+        if ( $code === null || (string) @file_get_contents( WP_CONTENT_DIR . '/advanced-cache.php' ) !== $code ) {
             self::sync( $settings );
         }
+    }
+
+    /** 早期儲存區不見時重建（只建立目錄、鎖與新的世代，不會讓任何舊資料復活）；每個請求只檢查一次。 */
+    public static function ensureStore(): bool {
+        if ( self::$storeReady !== null ) {
+            return self::$storeReady;
+        }
+        $directory = self::directory();
+        if ( $directory === '' ) {
+            return self::$storeReady = false;
+        }
+        if ( YSCacheEarlyStore::snapshot( $directory, '/' ) !== null ) {
+            return self::$storeReady = true;
+        }
+        return self::$storeReady = YSCacheEarlyStore::initialize( $directory ) && YSCacheEarlyStore::snapshot( $directory, '/' ) !== null;
     }
 
     public static function remove(): bool {
@@ -294,6 +359,13 @@ final class YSCacheEarly {
             return true;
         }
         $directory = self::directory();
+        if ( $directory !== '' && YSCacheEarlyStore::snapshot( $directory, '/' ) === null ) {
+            // 儲存區不見了（例如 /tmp 重開機後清空）：沒有任何項目可清，重建後就是全新的世代。
+            self::$storeReady = null;
+            if ( self::ensureStore() ) {
+                return true;
+            }
+        }
         if ( $directory !== '' && ( $path === null ? YSCacheEarlyStore::invalidateAll( $directory ) : YSCacheEarlyStore::invalidatePath( $directory, $path ) ) ) {
             return true;
         }

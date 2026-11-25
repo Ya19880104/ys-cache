@@ -128,9 +128,20 @@ Saving a product or post clears these pages:
 - Its author and date archives
 - The TranslatePress versions of these URLs
 
-Changes that affect only one page clear that page, such as variations, product images, prices, thumbnails and approved comments. Inventory changes clear the product. When availability changes, they also clear the shop, the product's category and tag archives and the front page. Clearing a URL also clears its `/page/N/` pagination and both device copies. Local copies are cleared in the same request and preload renders them again. Server and CDN purges are still queued.
+Changes that affect only one page clear that page, such as variations, product images, prices, thumbnails and approved comments. WooCommerce saves through the REST API or CSV import clear the product the same way. Inventory changes clear the product. When availability changes, they also clear the shop, the product's category and tag archives and the front page. Replacing, editing or deleting a media file also clears the products, posts and category archives that use it as a featured image, gallery image or category thumbnail.
 
-Menus, widgets, the Customizer, theme changes, plugin activation and updates, category and tag edits, Woo Discount Rules rule changes and site appearance options clear the whole site.
+Clearing a URL also clears its `/page/N/` pagination, comment pages, post pages such as `/2/`, both device copies and any letter-case variants of the address. Addresses that differ from the real permalink only by letter case are never stored as separate copies. Local copies are cleared in the same request and preload renders them again. Server and CDN purges are still queued.
+
+Unpublishing a page, making it private, changing its password or deleting it always clears its cached copy, even when automatic purging is off, because cached pages are sent before WordPress could check the post status.
+
+These changes clear the whole site:
+
+- Menus, widgets, the Customizer, theme changes, plugin activation and updates, and site appearance options
+- Category and tag edits, Woo Discount Rules rule changes, and WooCommerce settings saves such as price format, tax display, out-of-stock visibility and permalinks
+- Drag-and-drop product sorting
+- A title, address, parent or publish-status change of a page or product that appears in a menu, has child pages, or is the front, blog or shop page
+
+The `ys_cache_post_is_global` filter can mark more posts as site-wide.
 
 ### Response headers
 
@@ -153,7 +164,7 @@ Early hits also send `X-Accel-Expires: 0`, so an Nginx FastCGI cache does not st
 | `method` | A method other than `GET` and `HEAD` |
 | `host` | A hostname other than the site's HTTPS hostname |
 | `miss` | No valid copy. WordPress renders the page and stores it if it qualifies. |
-| `policy` | The host's security policy changed after the last sync. Save the settings to sync again. |
+| `policy` | The cached copy was stored under a different host security policy (`mu-plugins/cpfence.php`). WordPress renders the page with the current headers, and that new copy is served from then on. |
 
 ### PixelYourSite
 
@@ -339,9 +350,20 @@ YS CACHE 將每份快取限制在 `nonce_life` 的一半減五分鐘，預設為
 - 作者與日期彙整頁
 - 上述網址的 TranslatePress 各語系版本
 
-只影響單頁的變更只清除該頁，例如商品變體、商品圖片、價格、縮圖與已核准的留言。庫存變更會清除該商品。可售狀態改變時，也會清除商店、商品所屬的分類與標籤彙整頁及首頁。清除一個網址時，也會一併清除它的 `/page/N/` 分頁與兩種裝置版本。本機快取在同一個請求中清除，並由預載重新產生。伺服器與 CDN 清除照常排入佇列。
+只影響單頁的變更只清除該頁，例如商品變體、商品圖片、價格、縮圖與已核准的留言。透過 REST API 或 CSV 匯入儲存的 WooCommerce 商品也一樣只清除該商品。庫存變更會清除該商品。可售狀態改變時，也會清除商店、商品所屬的分類與標籤彙整頁及首頁。替換、編輯或刪除媒體檔案時，也會清除把它當作精選圖片、商品圖庫或分類縮圖的商品、文章與分類彙整頁。
 
-選單、小工具、自訂器、佈景主題變更、外掛啟用與更新、分類和標籤編輯、Woo Discount Rules 規則變更與網站外觀選項會清除全站。
+清除一個網址時，也會一併清除它的 `/page/N/` 分頁、留言分頁、`/2/` 這類文章分頁、兩種裝置版本，以及網址的大小寫變體。只和正式網址大小寫不同的網址不會另存一份。本機快取在同一個請求中清除，並由預載重新產生。伺服器與 CDN 清除照常排入佇列。
+
+頁面下架、設為私人、更改密碼或刪除時，即使關閉自動清除，也一定會清除它的快取，因為快取頁面是在 WordPress 檢查文章狀態之前送出的。
+
+下列變更會清除全站：
+
+- 選單、小工具、自訂器、佈景主題變更、外掛啟用與更新，以及網站外觀選項
+- 分類和標籤編輯、Woo Discount Rules 規則變更，以及 WooCommerce 設定儲存，例如價格格式、稅金顯示、缺貨商品是否顯示與固定網址
+- 以拖曳方式排序商品
+- 出現在選單、有子頁面，或身為首頁、文章頁、商店頁的頁面或商品，其標題、網址、上層或發布狀態改變
+
+可以用 `ys_cache_post_is_global` 篩選器把更多文章標示為全站引用。
 
 #### 回應標頭
 
@@ -364,7 +386,7 @@ YS CACHE 將每份快取限制在 `nonce_life` 的一半減五分鐘，預設為
 | `method` | `GET`、`HEAD` 以外的方法 |
 | `host` | 不是網站的 HTTPS 主機名稱 |
 | `miss` | 沒有有效的快取。WordPress 產生頁面，符合條件時寫入快取。 |
-| `policy` | 主機安全政策在上次同步後有變更。請儲存設定重新同步。 |
+| `policy` | 這份快取是在不同的主機安全政策（`mu-plugins/cpfence.php`）下儲存的。WordPress 會以目前的標頭重新產生頁面，之後就送出新的這份。 |
 
 #### PixelYourSite 設定
 

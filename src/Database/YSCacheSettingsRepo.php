@@ -156,7 +156,10 @@ final class YSCacheSettingsRepo {
     }
 
     private static function pageKey( string $path ): string {
-        $path = rtrim( rawurldecode( $path ), '/' ) ?: '/';
+        // 與早期儲存區相同的群組規則：大小寫變體、分頁與留言分頁跟主頁共用同一個世代。
+        $path = class_exists( '\YangSheep\Cache\YSCacheEarlyStore' )
+            ? \YangSheep\Cache\YSCacheEarlyStore::groupPath( $path )
+            : ( rtrim( rawurldecode( $path ), '/' ) ?: '/' );
         return self::PAGE_PREFIX . substr( hash( 'sha256', $path ), 0, 64 - strlen( self::PAGE_PREFIX ) );
     }
 
