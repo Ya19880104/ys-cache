@@ -31,6 +31,10 @@ namespace YangSheep\Cache {
         public static function config( array $settings ): array {
             return [ 'host' => self::host() ];
         }
+
+        public static function ttl( array $settings, string $path ): int {
+            return (int) ( $settings['ttl_seconds'] ?? 36000 );
+        }
     }
 }
 
@@ -403,6 +407,10 @@ namespace {
         expect_same( true, Preload::fullDue( $full, $now + 10, str_repeat( 'b', 32 ) ), 'Refresh after a site-wide generation change' );
         expect_same( false, Preload::fullDue( $full, $now + 10, '' ), 'An unreadable generation does not force a refresh' );
         expect_same( true, Preload::fullDue( Preload::withQueued( $full, [], true ), $now + 10, $epoch ), 'Refresh when requested' );
+        expect_same( [ 3600, 5400 ], Preload::timing( 36000 ), 'A 10-hour lifetime refreshes hourly and renews pages with less than 90 minutes left' );
+        expect_same( [ 450, 675 ], Preload::timing( 900 ), 'A 15-minute lifetime shortens both so pages never expire between refreshes' );
+        expect_same( [ 300, 360 ], Preload::timing( 120 ), 'Very short lifetimes still wait 5 minutes between full refreshes' );
+        expect_same( true, Preload::fullDue( $full, $now + 450, $epoch, 450 ), 'Short lifetimes refresh sooner' );
         $crowded = Preload::withFull( Preload::normalize( [], $now ), array_map( static fn ( int $i ): string => '/q' . $i . '/', range( 1, 4100 ) ), $now, '' );
         expect_same( 4000, count( $crowded['pending'] ), 'Cap the full refresh' );
 

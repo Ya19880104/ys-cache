@@ -26,9 +26,13 @@ final class YSCachePreload {
     private const BUDGET_SECONDS = 40.0;
     private const TIMEOUT = 20;
     private const SLOW_SECONDS = 10.0;
-    /** 剩餘壽命低於 90 分鐘就重新產生；大於每小時補件的間隔，項目到期前一定會被換新，不會出現空窗。 */
+    /**
+     * 補件間隔與新鮮度門檻依快取壽命計算（timing()）：壽命 10 小時時為每小時補件、剩不到 90 分鐘就重新產生；
+     * 壽命較短時一併縮短，項目到期前一定會被換新，也不會每分鐘重做全部頁面。
+     */
     private const FRESH_SECONDS = 5400;
     private const REFRESH_SECONDS = 3600;
+    private const MIN_REFRESH_SECONDS = 300;
     /** 兩個裝置都無法寫入（排除、不可快取、轉址）的路徑，這段時間內不再由整批預載排入。 */
     private const COOLDOWN_SECONDS = 21600;
     private const TOKEN_WINDOW = 300;
@@ -279,16 +283,17 @@ final class YSCachePreload {
             }
             $snapshot = YSCacheEarlyStore::snapshot( $directory, '/' );
             $epoch = is_array( $snapshot ) ? (string) $snapshot['epoch'] : '';
-            if ( self::fullDue( self::readState( $directory ), time(), $epoch ) ) {
+            [ $refresh, $freshness ] = self::timing( YSCacheEarly::ttl( $settings, '/' ) );
+            if ( self::fullDue( self::readState( $directory ), time(), $epoch, $refresh ) ) {
                 $paths = self::paths();
                 self::mutate( $directory, static fn ( array $state ): array => self::withFull( $state, $paths, time(), $epoch ) );
                 YSCacheEarlyStore::prune( $directory, 2.0 );
             }
             $config = YSCacheEarly::config( $settings );
             $locale = (string) get_locale();
-            $fresh = static function ( string $path, string $device ) use ( $directory, $host, $config, $locale ): bool {
+            $fresh = static function ( string $path, string $device ) use ( $directory, $host, $config, $locale, $freshness ): bool {
                 $variant = YSCacheEarlyRequest::variant( self::server( $device, $locale ), $config );
-                return $variant !== null && YSCacheEarlyStore::fresh( $directory, $host, $path, $variant, self::FRESH_SECONDS );
+                return $variant !== null && YSCacheEarlyStore::fresh( $directory, $host, $path, $variant, $freshness );
             };
             $fetch = static function ( string $path, string $device ) use ( $host, $locale ): array {
                 $started = microtime( true );
@@ -320,8 +325,17 @@ final class YSCachePreload {
     }
 
     /** 已要求整批預載、距離上次整批超過一小時，或儲存區整體換代（全站清除）時，重新排入全部網址。 */
-    public static function fullDue( array $state, int $now, string $epoch ): bool {
-        return $state['full'] || $now - $state['last_full'] >= self::REFRESH_SECONDS || ( $epoch !== '' && $epoch !== $state['epoch'] );
+    public static function fullDue( array $state, int $now, string $epoch, int $refresh = self::REFRESH_SECONDS ): bool {
+        return $state['full'] || $now - $state['last_full'] >= $refresh || ( $epoch !== '' && $epoch !== $state['epoch'] );
+    }
+
+    /**
+     * 依快取壽命計算 [補件間隔, 新鮮度門檻]（秒）。補件間隔為壽命的一半（5 分鐘到 1 小時），
+     * 門檻為壽命的 3/4（至少比補件間隔多 1 分鐘、最多 90 分鐘），兩次補件之間項目不會過期。
+     */
+    public static function timing( int $ttl ): array {
+        $refresh = max( self::MIN_REFRESH_SECONDS, min( self::REFRESH_SECONDS, intdiv( max( 0, $ttl ), 2 ) ) );
+        return [ $refresh, min( self::FRESH_SECONDS, max( $refresh + 60, intdiv( max( 0, $ttl ) * 3, 4 ) ) ) ];
     }
 
     /**
