@@ -20,6 +20,18 @@ namespace YangSheep\Cache {
     }
 }
 
+namespace YangSheep\Cache\Database {
+    /** 測試替身：全站清除只轉給早期儲存區，並記錄次數。 */
+    final class YSCacheSettingsRepo {
+        public static int $purges = 0;
+
+        public static function invalidate(): bool {
+            self::$purges++;
+            return \YangSheep\Cache\YSCacheEarly::invalidate();
+        }
+    }
+}
+
 namespace {
     use YangSheep\Cache\YSCacheEarly as Early;
     use YangSheep\Cache\YSCacheEarlyStore as Store;
@@ -165,8 +177,14 @@ namespace {
 
         // 審查修正：drop-in 與目前設定不一致時，maybeUpgrade() 自動重新同步（例如 TranslatePress 網址、排除規則或外掛版本改變）。
         expect_same( true, file_put_contents( $dropin, $code . "// stale\n" ) > 0, 'Simulate a stale drop-in' );
+        $beforeResync = Store::snapshot( $directory, $path );
+        $purges = \YangSheep\Cache\Database\YSCacheSettingsRepo::$purges;
         Early::maybeUpgrade( $settings );
         expect_same( $code, file_get_contents( $dropin ), 'maybeUpgrade rewrites a drop-in that no longer matches the settings' );
+        expect_same( $purges + 1, \YangSheep\Cache\Database\YSCacheSettingsRepo::$purges, 'A settings drift purges the whole site once' );
+        expect_same( true, $beforeResync !== Store::snapshot( $directory, $path ), 'Entries from before the drift are retired' );
+        Early::maybeUpgrade( $settings );
+        expect_same( $purges + 1, \YangSheep\Cache\Database\YSCacheSettingsRepo::$purges, 'A matching drop-in causes no further purges' );
         Early::maybeUpgrade( array_replace( $settings, [ 'exclude_cookies' => "another_session_*\n" ] ) );
         expect_same( true, str_contains( (string) file_get_contents( $dropin ), "'another_session_'" ), 'A settings change reaches the drop-in without a manual save' );
         Early::maybeUpgrade( $settings );

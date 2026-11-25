@@ -317,8 +317,13 @@ final class YSCacheEarly {
         }
         self::ensureStore();
         $code = self::wanted( $settings ) ? self::dropinCode( $settings ) : null;
-        if ( $code === null || (string) @file_get_contents( WP_CONTENT_DIR . '/advanced-cache.php' ) !== $code ) {
-            self::sync( $settings );
+        if ( $code !== null && (string) @file_get_contents( WP_CONTENT_DIR . '/advanced-cache.php' ) === $code ) {
+            return;
+        }
+        // 設定或版本變了（語言、排除規則、外掛更新），舊項目的變體與內容可能不再正確：同步成功後清除全站，交給預載補回。
+        // 只在同步真的成功時清除，避免寫不進 drop-in 時每個請求都在清快取。
+        if ( self::sync( $settings ) && $code !== null && self::owned() ) {
+            \YangSheep\Cache\Database\YSCacheSettingsRepo::invalidate();
         }
     }
 
