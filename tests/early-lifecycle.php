@@ -160,7 +160,9 @@ namespace {
         };
         $resetStore = static function (): void {
             $property = new ReflectionProperty( Early::class, 'storeReady' );
-            $property->setAccessible( true );
+            if ( PHP_VERSION_ID < 80100 ) {
+                $property->setAccessible( true );
+            }
             $property->setValue( null, null );
         };
         expect_same( true, Store::write( $directory, $host, $path, Store::snapshot( $directory, $path ), $headers, $current, 300, $variant ), 'Seed an entry before the wipe' );
