@@ -128,10 +128,6 @@ msgstr "檢查伺服器快取狀態"
 msgid "Check the resource ID, CDN hostname, and Cloudflare email format."
 msgstr "請確認資源 ID、CDN 主機名稱及 Cloudflare 帳號 Email 的格式。"
 
-#: templates/admin/settings.php:187
-msgid "Choose a lifetime from 1 second through 7 days. Cached HTML can expire sooner when a guest security token is due to change."
-msgstr "時效可設為 1 秒到 7 天。訪客安全權杖即將更新時，HTML 快取可能提早到期。"
-
 #: src/Admin/YSCacheAdmin.php:90
 msgid "Choose one server integration to manage HTML caching."
 msgstr "請選擇一個伺服器整合來管理 HTML 快取。"
@@ -159,10 +155,6 @@ msgstr "連線設定"
 #: src/YSCacheEnhanceIntegration.php:201
 msgid "Cookies, Authorization, query strings, private/form requests, and language selection require a server-side bypass or cache key rules before the FastCGI cache lookup."
 msgstr "請於 FastCGI 查詢快取前，在伺服器針對 Cookie、Authorization 標頭、查詢字串、私有內容和表單請求、語言選擇設定繞過或快取鍵規則。"
-
-#: templates/admin/settings.php:389
-msgid "Create a credential with access to read the resource and purge its cache. Enter the delivery hostname and use Find resource ID, or enter the resource ID from your provider dashboard."
-msgstr "建立可讀取資源並清除其快取的憑證。輸入傳遞主機名稱後按「查詢資源 ID」，也可填入供應商面板提供的資源 ID。"
 
 #: templates/admin/settings.php:252
 msgid "Defer JavaScript"
@@ -193,10 +185,6 @@ msgstr "啟用整合前，請先停用 LiteSpeed 訪客模式及強制快取規�
 msgid "Domain ID"
 msgstr "網域 ID"
 
-#: templates/admin/settings.php:238
-msgid "Early guest HTML cache paths"
-msgstr "訪客 HTML 提前快取路徑"
-
 #: templates/admin/settings.php:88
 msgid "Enable API purging"
 msgstr "啟用 API 清除"
@@ -212,10 +200,6 @@ msgstr "使用 YS CACHE 時，啟用訪客 HTML 快取"
 #: templates/admin/settings.php:194
 msgid "Server and CDN clearing runs in the background. CDN layers set to Manual only follow manual purge actions."
 msgstr "伺服器與 CDN 會在背景清除。設為「僅手動清除」的 CDN 層會跟隨手動清除操作。"
-
-#: templates/admin/settings.php:179
-msgid "Enter a lifetime of 1 second to 7 days that converts to whole seconds."
-msgstr "請輸入 1 秒到 7 天的時效，換算後須為整數秒。"
 
 #: src/YSCache.php:228
 msgid "Enter a public page URL on this site without a query string or fragment."
@@ -237,25 +221,13 @@ msgstr "每行輸入一個資源識別代碼或路徑。路徑可使用萬用字
 msgid "Enter one exact, registered WordPress script handle per line. Defer applies only to listed handles. Exclusions take precedence."
 msgstr "每行輸入一個已在 WordPress 註冊的完整指令碼識別代碼。只有列出的指令碼會延後執行，排除規則優先套用。"
 
-#: templates/admin/settings.php:240
-msgid "Enter one exact public path per line. Eligible HTTPS requests can serve HTML before WordPress starts. Choose pages with the same public content for anonymous visitors. Requires WP_CACHE."
-msgstr "每行輸入一個確切的公開路徑。符合條件的 HTTPS 請求可以在 WordPress 啟動前取得 HTML。請選擇向所有匿名訪客提供相同內容的頁面。此功能需要啟用 WP_CACHE。"
-
 #: templates/admin/settings.php:208
 msgid "Enter one rule per line. Path rules support * wildcards. Cookie rules match name prefixes, and User-Agent rules match substrings."
 msgstr "每行一條規則。路徑可使用 *，Cookie 比對名稱前綴，User-Agent 比對片段。"
 
-#: src/YSCacheCdnDiscovery.php:75
-msgid "Enter the CDN delivery hostname or the resource ID."
-msgstr "請輸入 CDN 傳遞主機名稱或資源 ID。"
-
 #: src/Admin/YSCacheAdminBar.php:58
 msgid "Enter the URL of the page you want to purge."
 msgstr "請輸入要清除快取的頁面網址。"
-
-#: src/YSCacheCdnDiscovery.php:66
-msgid "Enter the image CDN delivery hostname."
-msgstr "請輸入圖片 CDN 的傳遞主機名稱。"
 
 #: src/YSCacheCdnDiscovery.php:46 src/YSCacheCdnDiscovery.php:52
 msgid "Enter the provider API credential to look up this resource."
@@ -300,10 +272,6 @@ msgstr "HTML 快取已停用。"
 #: templates/admin/settings.php:62
 msgid "HTML only"
 msgstr "僅 HTML"
-
-#: ys-cache.php:5
-msgid "HTML page cache and layered cache purging for WordPress."
-msgstr "WordPress HTML 頁面快取與多層快取清除。"
 
 #: templates/admin/settings.php:65
 msgid "HTML, JavaScript, and CSS"
@@ -405,10 +373,6 @@ msgstr "清除 LiteSpeed Cache 需要能以同源方式連線至 WordPress 後�
 #: src/YSCacheLiteSpeed.php:49
 msgid "LiteSpeed server cache and native purge support were detected."
 msgstr "已偵測到 LiteSpeed 伺服器快取與原生清除支援。"
-
-#: templates/admin/settings.php:244
-msgid "Load private PixelYourSite tracking separately on supported direct homepage visits (beta)"
-msgstr "符合條件的直接首頁造訪會個別載入 PixelYourSite 私有追蹤資料（Beta）"
 
 #: templates/admin/settings.php:279
 msgid "Local HTML and OPcache"
@@ -1185,8 +1149,8 @@ msgid "The import form has expired. Reload the page and try again."
 msgstr "匯入表單已失效。請重新載入頁面後重試。"
 
 #: src/Migration/YSCacheImportSettings.php:50
-msgid "The imported cache lifetime exceeded seven days. YS CACHE applied its seven-day limit."
-msgstr "匯入的快取效期超過 7 天，已套用 YS CACHE 的 7 天上限。"
+msgid "The imported cache lifetime exceeded 12 hours. YS CACHE applied its 12-hour limit so visitor nonces in cached pages stay valid."
+msgstr "匯入的快取效期超過 12 小時，已套用 YS CACHE 的 12 小時上限，確保快取頁面裡的訪客 nonce 仍然有效。"
 
 #: src/Migration/YSCacheImportSettings.php:53
 msgid "The previous cache had no expiry. The existing YS CACHE lifetime was kept."
@@ -1240,11 +1204,70 @@ msgstr "你的帳號沒有執行匯入的權限。"
 msgid "When you activate YS CACHE, it checks the active cache plugin and imports supported settings before enabling HTML caching."
 msgstr "啟用 YS CACHE 時，系統會檢查目前運作中的快取外掛，匯入支援的設定後再啟用 HTML 快取。"
 
-msgid "Cache public Blocksy storefront content with PixelYourSite (beta)"
-msgstr "快取使用 PixelYourSite 的 Blocksy 商店公開內容（Beta）"
+msgid "HTML page cache, layered cache purging, and automatic settings import for WordPress."
+msgstr "WordPress HTML 頁面快取、多層快取清除與設定自動匯入。"
 
-msgid "On compatible guest visits, WordPress reuses the public page content and renders the header, footer, and tracking for the current visitor. Cart, checkout, and account pages stay private."
-msgstr "在相容的訪客頁面，WordPress 會重用公開頁面內容，並為當前訪客產生頁首、頁尾和追蹤資料。購物車、結帳與會員頁維持私有。"
+msgid "Could not verify which plugin owns advanced-cache.php. Check your site's active cache plugin."
+msgstr "無法確認 advanced-cache.php 屬於哪個外掛。請檢查網站目前啟用的快取外掛。"
 
-msgid "Requires Blocksy, PixelYourSite, and WP_CACHE on a single-site installation."
-msgstr "需要單站 WordPress、Blocksy、PixelYourSite，並啟用 WP_CACHE。"
+msgid "Enter a lifetime of 1 second to 12 hours that converts to whole seconds."
+msgstr "請輸入 1 秒到 12 小時的時效，換算後須為整數秒。"
+
+msgid "Choose a lifetime from 1 second through 12 hours. The 12-hour cap keeps guest security tokens (nonces) in cached pages valid, and cached HTML can expire sooner for the same reason."
+msgstr "時效可設為 1 秒到 12 小時。12 小時的上限可確保快取頁面中的訪客安全權杖（nonce）持續有效，HTML 快取也可能因此提早到期。"
+
+msgid "Early cache"
+msgstr "提前快取"
+
+msgid "Serve cached pages before WordPress loads"
+msgstr "在 WordPress 載入前送出快取頁面"
+
+#, php-format
+msgid "Covers all public pages. Logged-in users and visitors with a cart, wishlist, currency selection, or saved comment details still go to WordPress. Tracking parameters such as %s are ignored. Desktop and phone versions are cached separately."
+msgstr "適用所有公開頁面。已登入的使用者，以及有購物車、願望清單、幣別選擇或已儲存留言者資料的訪客，仍由 WordPress 處理。會忽略 %s 等追蹤參數。桌機與手機版本分開快取。"
+
+msgid "The early cache is not running. It requires HTTPS, WP_CACHE enabled in wp-config.php, a single-site installation, and an advanced-cache.php file that YS CACHE can manage. It also stays off while a CDN layer caches HTML or TranslatePress automatic language detection is active."
+msgstr "提前快取目前未運作。需使用 HTTPS、在 wp-config.php 啟用 WP_CACHE、單站 WordPress，以及可由 YS CACHE 管理的 advanced-cache.php。CDN 層快取 HTML 或啟用 TranslatePress 自動語言偵測時，也會維持停用。"
+
+msgid "Serve cached pages to shoppers with items in the cart"
+msgstr "對購物車內有商品的顧客也送出快取頁面"
+
+msgid "WooCommerce cart fragments refresh the mini cart after the page loads. Leave this off if the theme shows cart-dependent prices or messages on catalog pages."
+msgstr "頁面載入後，由 WooCommerce 購物車片段（cart fragments）更新迷你購物車。若佈景主題會在商品目錄頁顯示隨購物車變動的價格或訊息，請保持關閉。"
+
+msgid "Preload public pages (desktop and phone)"
+msgstr "預載公開頁面（桌機與手機）"
+
+msgid "WordPress Cron renders public pages in the background after purges and before cached copies expire. Cache hits do not start WP-Cron, so run it from a server cron job when most visits are cached."
+msgstr "清除快取後及快取副本到期前，WordPress Cron 會在背景產生公開頁面。命中快取的造訪不會啟動 WP-Cron，若多數造訪都命中快取，請改由主機排程執行 WP-Cron。"
+
+#, php-format
+msgid "Preload queue: %1$s pending. Last run: %2$s, %3$s page rendered."
+msgid_plural "Preload queue: %1$s pending. Last run: %2$s, %3$s pages rendered."
+msgstr[0] "預載佇列：%1$s 個待處理。上次執行：%2$s，產生 %3$s 個頁面。"
+
+#, php-format
+msgid "Preload queue: %s pending. Preload has not run yet."
+msgstr "預載佇列：%s 個待處理。尚未執行預載。"
+
+#, php-format
+msgid "Last preload error: %s"
+msgstr "上次預載錯誤：%s"
+
+msgid "A full preload of all public pages starts on the next run."
+msgstr "下一次執行時會預載所有公開頁面。"
+
+#, php-format
+msgid "Early cache storage: %1$s entry, %2$s."
+msgid_plural "Early cache storage: %1$s entries, %2$s."
+msgstr[0] "提前快取儲存：%1$s 筆，共 %2$s。"
+
+msgid "Additional ignored query parameters"
+msgstr "額外忽略的查詢參數"
+
+#, php-format
+msgid "Enter one parameter name per line. Like the built-in tracking parameters, such as %s, they are ignored when looking up a cached page. Add only parameters that PHP never reads; referral, coupon, and currency links must reach WordPress."
+msgstr "每行輸入一個參數名稱。這些參數會和內建追蹤參數（例如 %s）一樣，在查找快取頁面時忽略。只加入 PHP 不會讀取的參數；推薦、優惠券和幣別連結必須交由 WordPress 處理。"
+
+msgid "With the early cache, X-YS-Cache-Engine: early means the page was sent before WordPress loaded. When a request goes to WordPress instead, X-YS-Cache-Early shows the reason, such as cookie, query, or miss."
+msgstr "使用提前快取時，X-YS-Cache-Engine: early 表示頁面在 WordPress 載入前送出。請求改由 WordPress 處理時，X-YS-Cache-Early 會顯示原因，例如 cookie、query 或 miss。"

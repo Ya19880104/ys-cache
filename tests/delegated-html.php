@@ -63,6 +63,11 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         }
     }
     class_alias( FixtureNginx::class, 'YangSheep\Cache\YSCacheNginx' );
+    // 預載有自己的測試（tests/preload.php）；這裡只驗證 HTML 標頭與磁碟行為。
+    final class FixturePreload {
+        public static function register(): void {}
+    }
+    class_alias( FixturePreload::class, 'YangSheep\Cache\YSCachePreload' );
     $wpdb = new class( $path ) {
         public string $prefix = 'wp_';
         private string $path;
@@ -109,7 +114,7 @@ if ( PHP_SAPI === 'cli-server' && getenv( 'YS_CACHE_TEST_STORAGE' ) ) {
         public function query( string $query ): int { return 0; }
     };
 
-    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEarly', 'YSCachePixelWarm', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheLiteSpeed', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
+    foreach ( [ 'Admin/YSCacheAdminBar', 'Database/YSCacheSettingsRepo', 'YSCache', 'YSCacheAssetOptimization', 'YSCacheEarly', 'YSCacheEnhancePurge', 'YSCacheIntegrations', 'YSCacheInvalidation', 'YSCacheLiteSpeed', 'YSCacheProviders', 'YSCacheStorage' ] as $class ) {
         require ABSPATH . 'src/' . $class . '.php';
     }
     $cache = YangSheep\Cache\YSCache::instance();

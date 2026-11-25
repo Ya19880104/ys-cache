@@ -280,7 +280,7 @@ class_alias( TestTranslatePressAutomaticDetection::class, 'TRP_IN_Automatic_Lang
 expect_same( false, YSCacheIntegrations::allowsExternalHtml(), 'TranslatePress paid automatic language detection' );
 expect_same( null, YSCacheIntegrations::languageVariant(), 'IP-based suggestions cannot share the local HTML key' );
 
-$GLOBALS['nonce_lifetimes'] = [ -1 => PHP_INT_MAX, 'wp_rest' => PHP_INT_MAX ];
+$GLOBALS['nonce_lifetimes'] = [ -1 => PHP_INT_MAX, 'wp_rest' => PHP_INT_MAX, 'ajax-event-nonce' => PHP_INT_MAX ];
 expect_same( 90, YSCacheIntegrations::externalHtmlTtl( 90 ), 'The requested expiry is never increased' );
 expect_same( 0, YSCacheIntegrations::externalHtmlTtl( -1 ), 'An invalid configured expiry stays private' );
 
@@ -293,6 +293,10 @@ expect_same( true, $ttl >= 0 && $ttl <= 9, 'The REST nonce filter caps FastCGI T
 define( 'YS_ECOMMERCE_VERSION', '3.0.1' );
 $GLOBALS['nonce_lifetimes']['ys_ec_cart_nonce'] = 4;
 expect_same( 0, YSCacheIntegrations::externalHtmlTtl( 90 ), 'The YS CART nonce filter caps FastCGI TTL' );
-expect_same( 4, count( explode( ':', YSCacheIntegrations::nonceVariant() ) ), 'Local and delegated cache track the same nonce actions' );
+expect_same( 5, count( explode( ':', YSCacheIntegrations::nonceVariant() ) ), 'Local and delegated cache track the same nonce actions, including the PixelYourSite AJAX event nonce' );
+$GLOBALS['nonce_lifetimes']['ys_ec_cart_nonce'] = PHP_INT_MAX;
+$GLOBALS['nonce_lifetimes']['ys_ec_auth'] = PHP_INT_MAX;
+$GLOBALS['nonce_lifetimes']['ajax-event-nonce'] = 4;
+expect_same( 0, YSCacheIntegrations::externalHtmlTtl( 90 ), 'The PixelYourSite AJAX event nonce filter caps shared HTML TTL' );
 
 echo "Form, language, and nonce integrations passed.\n";

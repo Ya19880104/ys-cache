@@ -68,7 +68,6 @@ try {
         $response = (string) curl_exec( $curl );
         $status = (int) curl_getinfo( $curl, CURLINFO_RESPONSE_CODE );
         $size = (int) curl_getinfo( $curl, CURLINFO_HEADER_SIZE );
-        curl_close( $curl );
         $headers = [];
         foreach ( explode( "\r\n", substr( $response, 0, $size ) ) as $line ) {
             if ( str_contains( $line, ':' ) ) {

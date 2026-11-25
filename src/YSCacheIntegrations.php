@@ -8,6 +8,11 @@ defined( 'ABSPATH' ) || exit;
 final class YSCacheIntegrations {
 
 	public const YS_CART_PAGES = [ 'cart', 'checkout', 'thankyou', 'dashboard', 'login', 'register', 'order_lookup', 'coupon_center' ];
+	/** 不影響頁面內容的回應 cookie：命中時本來就不會送出，寫入共用快取時可以略過。 */
+	public const IGNORABLE_RESPONSE_COOKIES = [ 'woocommerce_recently_viewed', 'select_prod_list', 'productlist' ];
+	/** Meta 進階比對會帶入的個人資料欄位。 */
+	/** 真正的個人資料欄位。external_id 是 PixelYourSite 以 cookie 產生的識別碼，瀏覽器端會換成訪客自己的值，不在此列。 */
+	private const PERSONAL_MATCHING_KEYS = [ 'em', 'ph', 'fn', 'ln', 'ct', 'st', 'zp', 'db', 'ge', 'country' ];
 	private const WC_DYNAMIC_SHORTCODES = [ 'woocommerce_cart', 'woocommerce_checkout', 'woocommerce_my_account', 'woocommerce_order_tracking' ];
 	private const WC_DYNAMIC_BLOCKS = [ 'woocommerce/cart', 'woocommerce/checkout', 'woocommerce/order-confirmation-status' ];
 	private const FORM_PLUGINS = [
@@ -445,7 +450,8 @@ final class YSCacheIntegrations {
 	}
 
 	private static function nonceActions(): array {
-		$actions = [ -1, 'wp_rest' ];
+		// PixelYourSite 把 AJAX 事件 nonce（pysOptions.ajax_event）印在共用 HTML 裡。
+		$actions = [ -1, 'wp_rest', 'ajax-event-nonce' ];
 		if ( defined( 'YS_ECOMMERCE_VERSION' ) ) {
 			$actions[] = 'ys_ec_auth';
 			$actions[] = 'ys_ec_cart_nonce';
@@ -468,43 +474,126 @@ final class YSCacheIntegrations {
 		return false;
 	}
 
-	public static function hasVisitorEventRenderer(): bool {
-		if ( ! defined( 'PYS_VERSION' ) ) {
+	/**
+	 * PixelYourSite 的輸出是否帶有某位訪客的資料（會員編號、進階比對個資、購買事件或 late event）。
+	 *
+	 * 快取和 WP Rocket 一樣照常共用含 PixelYourSite 的頁面，不看它的任何設定；寫入端只用乾淨請求渲染，
+	 * 這些欄位對一般訪客永遠是空的。這裡只是最後一道保險：真的出現個資時不寫入。無法解析時視為沒有訪客資料。
+	 */
+	public static function pixelYourSiteVisitorData( string $html ): bool {
+		if ( preg_match( '~\bid\s*=\s*["\']?pys_late_event\b~i', $html ) === 1 ) {
+			return true;
+		}
+		if ( stripos( $html, 'pysOptions' ) === false ||
+			! preg_match( '~<script\b[^>]*\bid\s*=\s*(?:"pys-js-extra"|\'pys-js-extra\'|pys-js-extra(?=[\s/>]))[^>]*>(.*?)</script\s*>~is', $html, $extra ) ||
+			! preg_match( '~\bvar\s+pysOptions\s*=\s*(\{[^\r\n]*\})\s*;~', $extra[1], $json ) ) {
 			return false;
 		}
-		global $wp_filter;
-		foreach ( [ 'wp_enqueue_scripts' => 'outputData', 'wp_footer' => 'outputNoScriptData' ] as $hook => $method ) {
-			foreach ( $wp_filter[ $hook ]->callbacks ?? [] as $callbacks ) {
-				foreach ( $callbacks as $callback ) {
-					$handler = $callback['function'];
-					if ( is_array( $handler ) && $handler[0] instanceof \PixelYourSite\EventsManager && $handler[1] === $method ) {
-						return true;
-					}
+		$options = json_decode( $json[1], true );
+		if ( ! is_array( $options ) ) {
+			return false;
+		}
+		if ( array_key_exists( 'user_id', $options ) && ! in_array( $options['user_id'], [ '0', 0, '', null ], true ) ) {
+			return true;
+		}
+		foreach ( $options as $pixel ) {
+			if ( is_array( $pixel ) && ( self::hasPersonalMatching( $pixel['advancedMatching'] ?? null ) ||
+				self::hasPersonalMatching( $pixel['advanced_matching'] ?? null ) ) ) {
+				return true;
+			}
+		}
+		$analytics = $options['tracking_analytics'] ?? [];
+		$user = is_array( $analytics ) ? ( $analytics['userData'] ?? [] ) : [];
+		if ( is_array( $user )
+			? ( self::filled( $user['emails'] ?? null ) || self::filled( $user['phones'] ?? null ) || self::filled( $user['addresses'] ?? null ) )
+			: self::filled( $user ) ) {
+			return true;
+		}
+		foreach ( is_array( $options['staticEvents'] ?? null ) ? $options['staticEvents'] : [] as $pixel => $list ) {
+			foreach ( [ $pixel, ...( is_array( $list ) ? array_keys( $list ) : [] ) ] as $name ) {
+				if ( is_string( $name ) && stripos( $name, 'purchase' ) !== false ) {
+					return true;
 				}
 			}
 		}
 		return false;
 	}
 
-	public static function hasOnlyAttributionSession(): bool {
-		return empty( $_SESSION ) || ( is_array( $_SESSION ) && defined( 'PYS_VERSION' )
-			&& ! array_diff( array_keys( $_SESSION ), [ 'TrafficSource', 'LandingPage', 'TrafficUtms', 'TrafficUtmsId' ] ) );
+	/** 進階比對資料（任一層）是否帶有非空的個人資料欄位。 */
+	private static function hasPersonalMatching( $matching ): bool {
+		if ( ! is_array( $matching ) ) {
+			return self::filled( $matching );
+		}
+		foreach ( $matching as $key => $value ) {
+			if ( ( in_array( strtolower( (string) $key ), self::PERSONAL_MATCHING_KEYS, true ) && self::filled( $value ) ) ||
+				( is_array( $value ) && self::hasPersonalMatching( $value ) ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
-	/** These cookies may accompany a native Elementor fragment lookup on a private response. */
-	public static function isElementorAttributionCookie( string $name ): bool {
-		if ( function_exists( 'session_status' ) && session_status() === PHP_SESSION_ACTIVE && $name === session_name() ) {
-			return true;
+	private static function filled( $value ): bool {
+		if ( is_array( $value ) ) {
+			foreach ( $value as $item ) {
+				if ( self::filled( $item ) ) {
+					return true;
+				}
+			}
+			return false;
 		}
-		return defined( 'PYS_VERSION' ) && in_array( $name, [
-			'pbid', '_fbp', '_fbc', 'pys_first_visit', 'pys_start_session', 'pys_session_limit',
-			'pys_session_entry_referrer', 'pys_landing_page', 'last_pys_landing_page', 'pysTrafficSource', 'last_pysTrafficSource',
-		], true );
+		return $value !== null && $value !== '' && $value !== false;
+	}
+
+	/**
+	 * 去掉可略過的 Set-Cookie 後的回應標頭；仍有其他 Set-Cookie 時回傳 null（不能寫入共用快取）。
+	 *
+	 * 可略過：$names 列出的名稱，以及刪除 cookie 的標頭（Max-Age 小於等於 0，或沒有 Max-Age 且 Expires 已過）。
+	 */
+	public static function withoutIgnorableCookies( array $headers, array $names = self::IGNORABLE_RESPONSE_COOKIES, ?int $now = null ): ?array {
+		$now ??= time();
+		$kept = [];
+		foreach ( $headers as $header ) {
+			if ( ! is_string( $header ) ) {
+				return null;
+			}
+			if ( ! preg_match( '~\ASet-Cookie\s*:(.*)\z~is', $header, $cookie ) ) {
+				$kept[] = $header;
+				continue;
+			}
+			$attributes = explode( ';', $cookie[1] );
+			$pair = explode( '=', (string) array_shift( $attributes ), 2 );
+			$name = trim( $pair[0] );
+			if ( count( $pair ) !== 2 || $name === '' ) {
+				return null;
+			}
+			if ( in_array( $name, $names, true ) ) {
+				continue;
+			}
+			$maxAge = null;
+			$expires = null;
+			foreach ( $attributes as $attribute ) {
+				[ $key, $value ] = array_pad( explode( '=', $attribute, 2 ), 2, '' );
+				$key = strtolower( trim( $key ) );
+				if ( $key === 'max-age' ) {
+					$maxAge = trim( $value );
+				} elseif ( $key === 'expires' ) {
+					$expires = trim( $value );
+				}
+			}
+			$deleted = $maxAge !== null
+				? preg_match( '~\A-?[0-9]{1,12}\z~', $maxAge ) === 1 && (int) $maxAge <= 0
+				: $expires !== null && ( $time = strtotime( $expires ) ) !== false && $time < $now;
+			if ( ! $deleted ) {
+				return null;
+			}
+		}
+		return $kept;
 	}
 
 	public static function cacheableHtml( string $html, bool $localContactForm = false ): bool {
 		$localContactForm = $localContactForm && self::supportsPublicContactForms();
-		if ( ( stripos( $html, 'pys' ) !== false && preg_match( '~\bpysOptions\s*=|\bid\s*=\s*["\'](?:pys-js-extra|pys_late_event)["\']~i', $html ) )
+		if ( self::pixelYourSiteVisitorData( $html )
 			|| preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) || self::hasRenderedDynamicForm( $html, $localContactForm ) ||
 			( $localContactForm && self::hasPrivateContactForms( $html ) ) ) {
 			return false;

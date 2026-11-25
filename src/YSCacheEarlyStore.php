@@ -46,6 +46,11 @@ final class YSCacheEarlyStore {
             && ! preg_match( '~(?:^|/)(?:wp-admin|wp-json|wp-includes|wp-content|feed|trackback)(?:/|$)|\.php(?:/|$)~i', rawurldecode( $path ) );
     }
 
+    /** 這個路徑可能有快取項目（能被清除）；不合格的路徑從來不會被寫入。 */
+    public static function purgeablePath( string $path ): bool {
+        return self::validPathForInvalidation( $path );
+    }
+
     private static function validPathForInvalidation( string $path ): bool {
         return str_starts_with( $path, '/' ) && strlen( $path ) <= 2048 && ! str_contains( $path, '//' )
             && ! preg_match( '~%(?:2f|5c|25|(?![a-f0-9]{2}))~i', $path )

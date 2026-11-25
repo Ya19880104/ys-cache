@@ -23,7 +23,11 @@ final class YSCache {
     private ?string $liteSpeedNonce = null;
     private int $liteSpeedExpiry = 0;
     private ?array $pendingSharedHtml = null;
+    /** 早期快取寫入候選：YSCacheEarlyRequest::writerPath() 回傳的路徑與變體。 */
+    private ?array $earlyRequest = null;
     private ?array $earlySnapshot = null;
+    /** TranslatePress 非預設語言：等 trp_translated_html 輸出翻譯結果後再寫入。 */
+    private ?array $pendingEarly = null;
 
     public static function instance(): self {
         return self::$instance ??= new self();
@@ -35,22 +39,17 @@ final class YSCache {
         }
         YSCacheAdminBar::register();
         YSCacheAssetOptimization::register();
-        YSCachePixelWarm::register();
+        YSCachePreload::register();
         YSCacheEarly::observeChanges();
-        if ( defined( 'YS_CACHE_PIXEL_FALLBACK' ) ) {
-            add_action( 'wp_head', [ YSCachePixel::class, 'restoreBrowserHome' ], PHP_INT_MIN );
-        }
-        if ( defined( 'YS_CACHE_PIXEL_KIND' ) ) {
-            // Reassert the transport's privacy guard before the native template callbacks.
-            add_action( 'send_headers', static fn() => self::sendPrivateNoStore(), PHP_INT_MAX );
-        }
+        // 外掛更新後，舊版 drop-in 仍以舊格式呼叫讀取器；maybeUpgrade() 只在 drop-in 屬於 YS CACHE 時重新同步。
+        add_action( 'init', static function (): void {
+            YSCacheEarly::maybeUpgrade( self::settings() );
+        }, 1, 0 );
 
         add_action( 'init', [ $this, 'holdExternalHtml' ], 0, 0 );
         add_action( 'parse_request', [ $this, 'captureGeneration' ], 0, 0 );
         add_action( 'wp', [ $this, 'protectCartHeaders' ], PHP_INT_MAX );
         add_action( 'template_redirect', [ $this, 'protectPrivateResponse' ], PHP_INT_MAX );
-        // PixelYourSite adds its enqueue and no-script hooks during template_redirect.
-        add_action( 'template_redirect', [ $this, 'pixelResponse' ], PHP_INT_MAX );
         add_filter( 'template_include', [ $this, 'serveOrCapture' ], PHP_INT_MAX );
         add_filter( 'wp_speculation_rules_href_exclude_paths', [ $this, 'excludeTrackedNavigations' ] );
         add_filter( 'trp_translated_html', [ $this, 'rewriteTranslatedHtml' ], PHP_INT_MAX, 4 );
@@ -75,57 +74,25 @@ final class YSCache {
         return $settings;
     }
 
-    /** A speculative storefront render starts a tracking session before the visitor opens the link. */
+    /**
+     * 預取購物車、結帳或帳戶頁可能建立 WooCommerce session，之後的瀏覽都會略過快取。
+     * 其他公開頁面（首頁、商品、分類、標籤、商店）都可以預取，命中快取時也不會啟動 WordPress。
+     */
     public function excludeTrackedNavigations( array $paths ): array {
-        $settings = self::settings();
-        if ( ( empty( $settings['early_pixel_shell'] ) && empty( $settings['guest_template'] ) ) ||
-            ! self::usesLocalHtml( $settings ) || ! YSCacheIntegrations::hasVisitorEventRenderer() ) {
+        if ( ! self::usesLocalHtml( self::settings() ) || ! function_exists( 'wc_get_page_id' ) ) {
             return $paths;
         }
-        $paths[] = '/';
-        if ( function_exists( 'wc_get_permalink_structure' ) ) {
-            $structure = wc_get_permalink_structure();
-            foreach ( [ 'product_rewrite_slug', 'category_rewrite_slug', 'tag_rewrite_slug' ] as $key ) {
-                $base = trim( (string) ( $structure[ $key ] ?? '' ), '/' );
-                if ( $base !== '' && preg_match( '~^[\w/-]+$~uD', $base ) ) {
-                    $paths[] = '/' . $base . '/*';
-                }
-            }
-        }
-        if ( function_exists( 'wc_get_page_id' ) ) {
-            $homePath = rtrim( (string) wp_parse_url( home_url( '/' ), PHP_URL_PATH ), '/' ) . '/';
-            foreach ( [ 'shop', 'cart', 'checkout', 'myaccount' ] as $page ) {
-                $id = wc_get_page_id( $page );
-                $path = $id > 0 ? wp_parse_url( get_permalink( $id ), PHP_URL_PATH ) : null;
-                if ( is_string( $path ) && $path !== $homePath && str_starts_with( $path, $homePath ) ) {
-                    $relative = '/' . rtrim( substr( $path, strlen( $homePath ) ), '/' );
-                    $paths[] = $relative;
-                    $paths[] = $relative . '/*';
-                }
+        $homePath = rtrim( (string) wp_parse_url( home_url( '/' ), PHP_URL_PATH ), '/' ) . '/';
+        foreach ( [ 'cart', 'checkout', 'myaccount' ] as $page ) {
+            $id = wc_get_page_id( $page );
+            $path = $id > 0 ? wp_parse_url( get_permalink( $id ), PHP_URL_PATH ) : null;
+            if ( is_string( $path ) && $path !== $homePath && str_starts_with( $path, $homePath ) ) {
+                $relative = '/' . rtrim( substr( $path, strlen( $homePath ) ), '/' );
+                $paths[] = $relative;
+                $paths[] = $relative . '/*';
             }
         }
         return array_values( array_unique( $paths ) );
-    }
-
-    public function pixelResponse(): void {
-        if ( ! defined( 'YS_CACHE_PIXEL_KIND' ) ) {
-            if ( array_key_exists( 'ys_cache_pixel', $_GET ) ) {
-                nocache_headers();
-                status_header( 404 );
-                exit;
-            }
-            return;
-        }
-        $settings = self::settings();
-        if ( empty( $settings['early_pixel_shell'] ) || ! self::usesLocalHtml( $settings )
-            || ! in_array( '/', YSCacheEarly::paths( $settings['early_paths'] ?? '' ), true )
-            || is_user_logged_in() || YSCacheIntegrations::bypass() || ! is_front_page() || is_404() ) {
-            nocache_headers();
-            status_header( 403 );
-            exit;
-        }
-        YSCachePixel::dynamicResponse( YS_CACHE_PIXEL_KIND );
-        exit;
     }
 
     public static function enable( ?array $settings = null, ?string $rocketMigrationId = null ): bool {
@@ -157,7 +124,12 @@ final class YSCache {
     }
 
     private static function persist( array $settings, array $before ): bool {
-        if ( ! YSCacheSettingsRepo::invalidate() || ! YSCacheEarly::sync( $settings ) ) {
+        if ( ! YSCacheSettingsRepo::invalidate() ) {
+            return false;
+        }
+        // 早期快取預設開啟；主機無法接上讀取器時（沒有 WP_CACHE、不是 HTTPS、多站台等）仍要能儲存設定，
+        // 網站改用 WordPress 內的本機快取。先卸下舊的 drop-in，避免它繼續以舊規則送出頁面。
+        if ( ! YSCacheEarly::sync( $settings ) && ! YSCacheEarly::remove() ) {
             return false;
         }
         if ( YSCacheSettingsRepo::save( $settings ) ) {
@@ -197,9 +169,14 @@ final class YSCache {
             'ttl_unit'        => in_array( $settings['ttl_unit'], [ 's', 'min', 'hr', 'day' ], true ) ? $settings['ttl_unit'] : 's',
             'auto_purge'      => ! empty( $settings['auto_purge'] ),
             'auto_detect'     => ! empty( $settings['auto_detect'] ),
-            'early_paths'     => implode( "\n", YSCacheEarly::paths( self::lines( $settings['early_paths'] ?? '' ) ) ),
-            'early_pixel_shell' => ! empty( $settings['early_pixel_shell'] ),
-            'guest_template' => ! empty( $settings['guest_template'] ),
+            'early'           => ! empty( $settings['early'] ),
+            'serve_cart_visitors' => ! empty( $settings['serve_cart_visitors'] ),
+            'preload'         => ! empty( $settings['preload'] ),
+            'ignore_params'   => self::lines( $settings['ignore_params'] ?? '' ),
+            // 0.1 版的路徑清單、pixel shell 與 guest template 已停用，只保留欄位供遷移判斷。
+            'early_paths'     => '',
+            'early_pixel_shell' => false,
+            'guest_template'  => false,
             'exclude_paths'   => self::lines( $settings['exclude_paths'] ),
             'exclude_cookies' => self::lines( $settings['exclude_cookies'] ),
             'exclude_agents'  => self::lines( $settings['exclude_agents'] ),
@@ -257,23 +234,40 @@ final class YSCache {
         YSCacheEnhancePurge::onContentChange( $settings );
     }
 
-    public function invalidateStockOnChange( array $urls ): void {
+    /**
+     * 立即清除這些頁面：本機快取同步清除（同時通知預載重新產生），CDN 與主機層照舊排入背景佇列。
+     * $content 為 true 表示包含庫存以外的內容變更；YS CLOUD 只能整站清除，這時改清全站。
+     */
+    public function invalidateStockOnChange( array $urls, bool $content = false ): void {
         $settings = self::settings();
         if ( empty( $settings['auto_purge'] ) ) {
+            return;
+        }
+        if ( $content && self::delegatesToCloud( $settings ) ) {
+            $this->invalidateOnChange();
             return;
         }
         $aliases = (array) ( $settings['providers']['alias_hosts'] ?? [] );
         $urls = array_values( array_filter( (array) apply_filters( 'ys_cache_stock_purge_urls', $urls ), 'is_string' ) );
         $targets = [];
+        $paths = [];
         foreach ( self::translatedPurgeUrls( $urls ) as $url ) {
             $target = self::pagePurgeTarget( $url, $aliases );
             if ( $target !== null ) {
                 $targets[ $target['url'] ] = true;
+                $paths[ $target['path'] ] = true;
             }
         }
-        if ( $targets !== [] ) {
-            YSCacheEnhancePurge::onStockChange( $settings, array_keys( $targets ) );
+        if ( $targets === [] ) {
+            return;
         }
+        if ( self::usesLocalHtml( $settings ) ) {
+            // 早期儲存區清除失敗時 YSCacheEarly 會卸下 drop-in，背景工作的 purgeStockPages() 便會再清一次本機頁面。
+            foreach ( array_keys( $paths ) as $path ) {
+                YSCacheSettingsRepo::invalidatePage( $path );
+            }
+        }
+        YSCacheEnhancePurge::onStockChange( $settings, array_keys( $targets ) );
     }
 
     /** Called by the background worker. Keep inventory purges limited to known pages. */
@@ -294,7 +288,8 @@ final class YSCache {
 
         $results = [];
         if ( self::usesLocalHtml( $settings ) || self::usesLiteSpeed( $settings ) || self::usesNginx( $settings ) || self::hasEdgeHtml( $settings ) ) {
-            foreach ( array_keys( $paths ) as $path ) {
+            // 早期快取的頁面已在變更當下由 invalidateStockOnChange() 同步清除；再清一次只會丟掉預載剛補上的頁面。
+            foreach ( YSCacheEarly::active( $settings ) ? [] : array_keys( $paths ) as $path ) {
                 if ( ! YSCacheSettingsRepo::invalidatePage( $path ) ) {
                     return [ self::pagePurgeResult( 'YS CACHE', 'error', __( 'The page cache generation could not be updated.', 'ys-cache' ) ) + [ 'retryable' => true ] ];
                 }
@@ -341,11 +336,16 @@ final class YSCache {
 
     public function captureGeneration(): void {
         $settings = self::settings();
-        $uri = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
-        if ( ! empty( $settings['early_paths'] ) && self::usesLocalHtml( $settings ) && YSCacheEarly::owned()
-            && in_array( $uri, YSCacheEarly::paths( $settings['early_paths'] ), true )
-            && YSCacheEarlyStore::requestPath( $_SERVER, $_COOKIE, YSCacheEarly::host() ) === $uri ) {
-            $this->earlySnapshot = YSCacheEarlyStore::snapshot( YSCacheEarly::directory(), $uri );
+        if ( YSCacheEarly::active( $settings ) ) {
+            // 只有乾淨請求（無查詢字串、無 session 或狀態 cookie）的渲染可以寫入早期快取。
+            $request = YSCacheEarlyRequest::writerPath( $_SERVER, $_COOKIE, YSCacheEarly::config( $settings ) );
+            $snapshot = ( $request === null || is_user_logged_in() ) ? null : YSCacheEarlyStore::snapshot( YSCacheEarly::directory(), $request['path'] );
+            if ( $snapshot !== null ) {
+                $this->earlyRequest = $request;
+                $this->earlySnapshot = $snapshot;
+                // 這次渲染會給所有訪客共用：不讓 PixelYourSite 建立 PHP session（命中時本來就不會執行 PHP，行為一致）。
+                add_filter( 'pys_skip_session', '__return_true', PHP_INT_MAX );
+            }
         }
         if ( in_array( $_SERVER['REQUEST_METHOD'] ?? '', [ 'GET', 'HEAD' ], true ) && empty( $_SERVER['QUERY_STRING'] ) ) {
             // A render that began before a save can never repopulate the new generation.
@@ -553,16 +553,12 @@ final class YSCache {
                 break;
             }
         }
-        // The event renderer can generate new IDs even on a request without a PHP session.
-        if ( defined( 'YS_CACHE_PIXEL_FALLBACK' ) || ( YSCacheIntegrations::hasVisitorEventRenderer() && ! YSCachePixelWarm::isVerified() ) ) {
-            $this->privateResponse = true;
-        }
         if ( ! $this->liteSpeedHtml || $this->edgeHtml || $this->privateResponse ) {
             // Shared HTML caching needs an explicit eligibility decision.
             $control = 'Cache-Control: private, no-cache, no-store, must-revalidate';
             if ( ! $this->privateResponse && $this->earlySnapshot !== null ) {
-                // Only our own hold can be ignored when publishing to protected origin storage.
-                $this->originCacheControl = $control . ', ys-cache-hold="' . bin2hex( random_bytes( 8 ) ) . '"';
+                // 早期快取候選與命中時一樣不送 no-store（保留上一頁快取）；hold 權杖讓寫入端分辨自己的標頭與外掛送出的標頭。
+                $this->originCacheControl = 'Cache-Control: private, no-cache, must-revalidate, ys-cache-hold="' . bin2hex( random_bytes( 8 ) ) . '"';
                 $control = $this->originCacheControl;
             }
             header( $control, true );
@@ -645,22 +641,9 @@ final class YSCache {
         return $lifetime;
     }
 
-    private static function cachePath( array $settings, bool &$localContactForm, bool $nativeElementor = false, bool $guestTemplate = false ): ?string {
+    private static function cachePath( array $settings, bool &$localContactForm ): ?string {
         $uri = (string) ( $_SERVER['REQUEST_URI'] ?? '' );
         $method = $_SERVER['REQUEST_METHOD'] ?? '';
-        if ( $guestTemplate ) {
-            $headers = $_SERVER;
-            // The native template validates the remaining cookies and PHP session before lookup.
-            unset( $headers['HTTP_COOKIE'] );
-            if ( YSCachePixelWarm::isTemplateWarm() ) {
-                unset( $headers[ YSCachePixelWarm::HEADER ] );
-            }
-            if ( YSCachePixelTransport::hasProtectedHeaders( $headers ) || ! empty( $headers['HTTP_X_FORWARDED_USER'] ) ||
-                ! empty( $headers['HTTP_PROXY_AUTHORIZATION'] ) || ! empty( $headers['HTTP_SEC_PURPOSE'] ) ||
-                ! empty( $headers['HTTP_PURPOSE'] ) || YSCacheEarlyStore::requestPath( $headers, [], YSCacheEarly::host() ) !== $uri ) {
-                return null;
-            }
-        }
         if ( ! in_array( $method, [ 'GET', 'HEAD' ], true ) || empty( $uri ) || strlen( $uri ) > 2048 ||
             strpos( $uri, '/' ) !== 0 || strpos( $uri, '//' ) !== false || strpbrk( $uri, "?#\\\r\n" ) !== false ||
             ! empty( $_GET ) || ! empty( $_SERVER['QUERY_STRING'] ) || ! empty( $_SERVER['HTTP_AUTHORIZATION'] ) ||
@@ -683,9 +666,7 @@ final class YSCache {
         $allowed = (array) apply_filters( 'ys_cache_public_cookie_names', [] );
         foreach ( $_COOKIE as $name => $value ) {
             if ( ! is_string( $name ) ||
-                ( ! in_array( $name, $allowed, true ) && ! YSCacheIntegrations::isPublicCookie( $name, $value )
-                    && ! ( $nativeElementor && YSCacheIntegrations::isElementorAttributionCookie( $name ) )
-                    && ! ( $guestTemplate && YSCacheGuestTemplate::allowsAttributionCookie( $name, $value ) ) ) ||
+                ( ! in_array( $name, $allowed, true ) && ! YSCacheIntegrations::isPublicCookie( $name, $value ) ) ||
                 self::match( $settings['exclude_cookies'], $name, 'prefix' ) ) {
                 return null;
             }
@@ -774,68 +755,32 @@ final class YSCache {
         $settings = self::settings();
         if ( headers_sent() || is_feed() || is_preview() || is_trackback() || is_embed() || is_customize_preview() ) {
             $this->excludeLiteSpeedResponse();
+            $this->releaseEarlyHold();
             return $template;
         }
 
         $this->frontendTemplate = true;
-        $localContactForm = false;
-        if ( ! empty( $settings['early_pixel_shell'] ) && $this->privateResponse && self::usesLocalHtml( $settings )
-            && $this->earlySnapshot !== null && YSCacheIntegrations::hasVisitorEventRenderer() && YSCachePixel::eligible() ) {
-            YSCachePixelWarm::schedule( $settings );
-        }
-        if ( ! empty( $settings['guest_template'] ) && self::usesLocalHtml( $settings ) &&
-            ( YSCachePixelWarm::isTemplateWarm() || ( ! YSCachePixelWarm::headerPresent() && $this->privateResponse ) ) &&
-            ! defined( 'YS_CACHE_PIXEL_FALLBACK' ) && ! defined( 'YS_CACHE_PIXEL_KIND' ) &&
-            ! is_user_logged_in() && ! is_404() && ! is_search() && ( ! is_singular() || ! post_password_required() ) &&
-            YSCacheIntegrations::hasVisitorEventRenderer() && YSCacheIntegrations::hasOnlyAttributionSession() &&
-            self::blockingCache( $settings ) === '' ) {
-            $profile = YSCachePixelWarm::profile( $_SERVER );
-            $path = $profile === null ? null : self::cachePath( $settings, $localContactForm, false, true );
-            if ( $path !== null && ! $localContactForm && YSCacheGuestTemplate::isPublicRoute( $path ) ) {
+        if ( YSCacheEarly::active( $settings ) ) {
+            // 早期讀取器啟用時不讀寫舊的本機快取：只有符合條件的乾淨渲染會寫入早期儲存區。
+            if ( $this->earlyEligible( $settings ) ) {
+                header( 'X-YS-Cache: MISS', true );
+                $this->captureEarly( $settings );
+                return $template;
+            }
+            $this->releaseEarlyHold();
+            if ( ! self::publicFormPath( $settings ) ) {
                 $this->excludeLiteSpeedResponse();
-                // The surrounding response remains private on both hits and neutral builds.
-                self::sendPrivateNoStore();
-                $delegatedTemplate = YSCacheGuestTemplate::route( $template, $settings, $path, $profile, YSCachePixelWarm::isTemplateWarm() );
-                if ( $delegatedTemplate !== $template ) {
-                    $this->captureAssets( $settings['providers'] );
-                    return $delegatedTemplate;
-                }
+                $this->captureAssets( $settings['providers'] );
+                return $template;
             }
+            // 公開表單頁不進早期快取，沿用 WordPress 內的本機快取：每位訪客仍取得各自的新表單欄位。
         }
-        if ( YSCachePixelWarm::isVerified() ) {
-            $path = self::cachePath( $settings, $localContactForm );
-            if ( $path === '/' && ! $this->privateResponse && $this->earlySnapshot !== null && ! $localContactForm
-                && self::usesLocalHtml( $settings ) && ! empty( $settings['early_pixel_shell'] ) && YSCachePixel::eligible()
-                && ! is_user_logged_in() && ! is_404() && $this->rewriteAssetsHere()
-                && self::blockingCache( $settings ) === '' && self::headersAllowCache( headers_list() )
-                && YSCacheIntegrations::nonceVariant() !== null ) {
-                $settings['ttl_seconds'] = self::pathLifetime( $settings['ttl_seconds'], $settings['ttl_paths'], '/' );
-                $this->capturePixelShell( $settings );
-            }
-            // A neutral build must never populate a normal page cache or release upstream HTML.
-            $this->excludeLiteSpeedResponse();
-            return $template;
-        }
-        // Elementor already renders its dynamic widgets on every request. We can restrict
-        // its existing document cache on session pages without sharing the full response.
-        $nativeElementor = $this->privateResponse && defined( 'ELEMENTOR_VERSION' ) && self::usesLocalHtml( $settings )
-            && is_singular() && ! is_user_logged_in() && ! post_password_required()
-            && ! is_404() && ! is_search() && ( $_SERVER['REQUEST_METHOD'] ?? '' ) === 'GET'
-            && YSCacheIntegrations::hasOnlyAttributionSession();
-        $path = self::cachePath( $settings, $localContactForm, $nativeElementor );
+
+        $localContactForm = false;
+        $path = self::cachePath( $settings, $localContactForm );
         if ( $path === null || $this->privateResponse || is_user_logged_in() || is_404() || is_search() ||
             ( is_singular() && post_password_required() ) ) {
             $this->excludeLiteSpeedResponse();
-            if ( $nativeElementor && $path !== null && ! $localContactForm && self::blockingCache( $settings ) === '' ) {
-                $post = get_queried_object();
-                $language = YSCacheIntegrations::languageVariant();
-                if ( $post instanceof \WP_Post && $post->post_status === 'publish' && $post->post_password === '' && $language !== null ) {
-                    YSCacheElementor::register(
-                        (int) $post->ID, $path, $language, $this->requestPageGenerations ?? YSCacheSettingsRepo::pageGenerations( $path ),
-                        self::pathLifetime( $settings['ttl_seconds'], $settings['ttl_paths'], $path )
-                    );
-                }
-            }
             $this->captureAssets( $settings['providers'] );
             return $template;
         }
@@ -921,16 +866,6 @@ final class YSCache {
             }
         }
         if ( $html !== null ) {
-            if ( $this->earlySnapshot !== null && $this->originCacheControl !== null && ! $localContactForm
-                && $_SERVER['REQUEST_METHOD'] === 'GET' && $this->rewriteAssetsHere()
-                && ! has_filter( 'ys_cache_allow_request' ) && ! has_filter( 'ys_cache_allow_html' ) ) {
-                $variant = YSCacheEarlyStore::requestVariant( $_SERVER );
-                if ( $variant !== null && YSCacheEarlyStore::claimRender( YSCacheEarly::directory(), YSCacheEarly::host(), $path, $variant ) ) {
-                    header( 'X-YS-Cache: MISS', true );
-                    $this->captureHtml( $settings, $nonce, $directory, $key, false, false, true );
-                    return $template;
-                }
-            }
             header( 'X-YS-Cache: HIT', true );
             $this->cachedHtml = $html;
             if ( $this->edgeHtml && $_SERVER['REQUEST_METHOD'] === 'GET' ) {
@@ -947,7 +882,193 @@ final class YSCache {
         return $template;
     }
 
-    private function captureHtml( array $settings, string $nonce, ?string $directory, ?string $key, bool $fastcgi = false, bool $localContactForm = false, bool $earlyOnly = false ): void {
+    /**
+     * 這次渲染能否寫入早期快取。請求本身已由 YSCacheEarlyRequest::writerPath() 確認是乾淨請求，
+     * 這裡檢查只有 WordPress 才知道的條件：頁面類型、排除規則、購物車、通知、即將推出模式與 nonce 身分。
+     */
+    private function earlyEligible( array $settings ): bool {
+        if ( $this->earlyRequest === null || $this->originCacheControl === null || $this->privateResponse ||
+            ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' || is_user_logged_in() || is_404() || is_search() ||
+            ( is_singular() && post_password_required() ) ) {
+            return false;
+        }
+        $path = $this->earlyRequest['path'];
+        $decoded = rawurldecode( $path );
+        $excluded = (string) $settings['exclude_paths'];
+        $forms = (string) $settings['public_cf7_paths'];
+        // 公開表單頁需要每位訪客各自的表單權杖，不放進早期快取。
+        if ( self::match( $excluded, $path, 'path' ) || self::match( $excluded, $decoded, 'path' ) ||
+            ( $forms !== '' && ( self::match( $forms, $path, 'path' ) || self::match( $forms, $decoded, 'path' ) ) ) ||
+            YSCacheIntegrations::bypass() || ! apply_filters( 'ys_cache_allow_request', true, $path ) || self::comingSoon() ||
+            self::variesByLocation() ) {
+            return false;
+        }
+        $woocommerce = function_exists( 'WC' ) ? WC() : null;
+        if ( is_object( $woocommerce ) ) {
+            if ( function_exists( 'wc_notice_count' ) && is_object( $woocommerce->session ) && (int) wc_notice_count() !== 0 ) {
+                return false;
+            }
+            $cart = $woocommerce->cart;
+            if ( is_object( $cart ) && ( ! is_callable( [ $cart, 'is_empty' ] ) || ! $cart->is_empty() ) ) {
+                return false;
+            }
+        }
+        return YSCacheIntegrations::nonceVariant() !== null && YSCacheIntegrations::languageVariant() !== null &&
+            self::blockingCache( $settings ) === '';
+    }
+
+    /** 這次請求的路徑是否列在「公開表單路徑」（不含查詢字串，原始與解碼後都比對）。 */
+    private static function publicFormPath( array $settings ): bool {
+        $forms = (string) ( $settings['public_cf7_paths'] ?? '' );
+        if ( $forms === '' ) {
+            return false;
+        }
+        $path = (string) strtok( (string) ( $_SERVER['REQUEST_URI'] ?? '' ), '?' );
+        return self::match( $forms, $path, 'path' ) || self::match( $forms, rawurldecode( $path ), 'path' );
+    }
+
+    /**
+     * 依訪客所在地改變價格或幣別時，沒有 cookie 的渲染也會因訪客而不同，不能共用：
+     * WooCommerce 依地理定位計稅，或啟用了依國家定價／自動切換幣別的外掛。
+     */
+    private static function variesByLocation(): bool {
+        $varies = false;
+        if ( function_exists( 'WC' ) ) {
+            $varies = get_option( 'woocommerce_calc_taxes' ) === 'yes' &&
+                in_array( get_option( 'woocommerce_default_customer_address' ), [ 'geolocation', 'geolocation_ajax' ], true );
+            foreach ( [ 'WOOCS', 'WOOMULTI_CURRENCY', 'WOOMULTI_CURRENCY_F', 'WC_Aelia_CurrencySwitcher', 'WCPBC_Pricing_Zones', 'WC_Product_Price_Based_Country' ] as $class ) {
+                $varies = $varies || class_exists( $class, false );
+            }
+            $varies = $varies || ( function_exists( 'wcml_is_multi_currency_on' ) && wcml_is_multi_currency_on() );
+        }
+        return (bool) apply_filters( 'ys_cache_varies_by_location', $varies );
+    }
+
+    /** WooCommerce「即將推出」模式會以同一網址輸出不同頁面；作用在這次請求時不寫入。 */
+    private static function comingSoon(): bool {
+        if ( ! function_exists( 'WC' ) || get_option( 'woocommerce_coming_soon' ) !== 'yes' ) {
+            return false;
+        }
+        if ( get_option( 'woocommerce_store_pages_only' ) !== 'yes' ) {
+            return true;
+        }
+        foreach ( [ 'is_woocommerce', 'is_shop', 'is_product', 'is_product_taxonomy' ] as $storePage ) {
+            if ( function_exists( $storePage ) && $storePage() ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 早期快取 MISS：最終輸出時確認是完整、未個人化的公開回應，才寫入共用儲存區。 */
+    private function captureEarly( array $settings ): void {
+        $baseline = $this->htmlResponseHeaders();
+        $complete = true;
+        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $settings ): string {
+            if ( ! ( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
+                $complete = false;
+                return $html;
+            }
+            $translated = ! $this->rewriteAssetsHere();
+            if ( ! $translated ) {
+                // 公開版本補上輪播首張圖的 srcset（再改寫資源網址），當次回應與快取內容一致。
+                $html = YSCacheCarousel::completeHeroSources( $html );
+            }
+            $responseHtml = $this->rewriteAssets( $html, $settings['providers'] );
+            $status = http_response_code();
+            $headers = $complete && ! headers_sent() ? $this->earlyHeaders( $baseline ) : null;
+            if ( $headers === null || ( $status !== false && $status !== 200 ) || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ||
+                ! $this->earlyHtmlAllowed( $html ) ) {
+                $this->abandonEarly();
+                return $responseHtml;
+            }
+            if ( $translated ) {
+                // TranslatePress 非預設語言：等 trp_translated_html 輸出翻譯後的 HTML 再寫入。
+                $this->pendingEarly = [ 'settings' => $settings, 'baseline' => $baseline ];
+            } else {
+                $this->storeEarly( $settings, $responseHtml, $headers );
+            }
+            return $responseHtml;
+        } );
+    }
+
+    private function earlyHtmlAllowed( string $html ): bool {
+        return self::isCompleteHtml( $html ) && YSCacheIntegrations::cacheableHtml( $html ) &&
+            ! self::trackingSuppressed( $html ) && apply_filters( 'ys_cache_allow_html', true, $html );
+    }
+
+    /**
+     * PixelYourSite 判定為機器人或快取預載的請求可能不輸出追蹤程式碼；
+     * 這樣的渲染（沒有 pysOptions）不能給一般訪客共用。
+     */
+    private static function trackingSuppressed( string $html ): bool {
+        if ( ! defined( 'PYS_VERSION' ) || ! function_exists( 'PixelYourSite\\PYS' ) || stripos( $html, 'pysOptions' ) !== false ) {
+            return false;
+        }
+        $plugin = \PixelYourSite\PYS();
+        foreach ( [ 'is_user_agent_bot', 'isCachePreload' ] as $method ) {
+            if ( is_object( $plugin ) && is_callable( [ $plugin, $method ] ) && $plugin->$method() ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 去掉可略過的 Set-Cookie 後，回應標頭必須與開始擷取時完全相同；其他 Set-Cookie 一律不寫入。 */
+    private function earlyHeaders( array $baseline ): ?array {
+        $names = self::ignorableResponseCookies();
+        $before = YSCacheIntegrations::withoutIgnorableCookies( $baseline, $names );
+        $after = YSCacheIntegrations::withoutIgnorableCookies( $this->htmlResponseHeaders(), $names );
+        return $before !== null && $before === $after ? $after : null;
+    }
+
+    /** 可略過的回應 cookie 名稱；其他外掛可用 ys_cache_ignorable_response_cookies 篩選器加入。 */
+    private static function ignorableResponseCookies(): array {
+        $names = (array) apply_filters( 'ys_cache_ignorable_response_cookies', YSCacheIntegrations::IGNORABLE_RESPONSE_COOKIES );
+        return array_values( array_filter( $names, static fn ( $name ): bool => is_string( $name ) && $name !== '' ) );
+    }
+
+    /** 這次回應不會寫入早期快取。 */
+    private function abandonEarly(): void {
+        if ( ! headers_sent() ) {
+            header( 'X-YS-Cache: BYPASS', true );
+        }
+        $this->releaseEarlyHold();
+    }
+
+    /** 不寫入早期快取的回應恢復 no-store，與其他不可共用的回應一致（只替換自己送出的 hold 標頭）。 */
+    private function releaseEarlyHold(): void {
+        if ( $this->originCacheControl !== null && ! headers_sent() && in_array( $this->originCacheControl, headers_list(), true ) ) {
+            self::sendPrivateNoStore();
+        }
+    }
+
+    /** 寫入早期儲存區。$headers 已由 earlyHeaders() 確認與開始擷取時相同。 */
+    private function storeEarly( array $settings, string $html, array $headers ): void {
+        if ( headers_sent() || $this->earlyRequest === null || $this->earlySnapshot === null || $this->originCacheControl === null ) {
+            return;
+        }
+        // 只能忽略自己送出的 hold 標頭；外掛另外送出的 private、no-cache 或 no-store 一律不寫入。
+        $hold = array_search( $this->originCacheControl, $headers, true );
+        if ( $hold !== false ) {
+            unset( $headers[ $hold ] );
+            $headers = YSCacheIntegrations::withoutIgnorableCookies( array_values( $headers ), self::ignorableResponseCookies() );
+        }
+        $path = $this->earlyRequest['path'];
+        $ttl = YSCacheEarly::ttl( $settings, $path );
+        if ( $hold === false || $headers === null || ! self::headersAllowCache( $headers ) || self::headersProhibitSharedCache( $headers ) ||
+            $ttl <= 0 || is_user_logged_in() ) {
+            $this->abandonEarly();
+            return;
+        }
+        // 渲染期間這個頁面被清除過：不寫入，交給下一次請求重新產生。
+        if ( $this->requestGenerationUnchanged() ) {
+            YSCacheEarlyStore::write( YSCacheEarly::directory(), YSCacheEarly::host(), $path, $this->earlySnapshot, $headers,
+                $html, $ttl, $this->earlyRequest['variant'] );
+        }
+    }
+
+    private function captureHtml( array $settings, string $nonce, ?string $directory, ?string $key, bool $fastcgi = false, bool $localContactForm = false ): void {
         if ( ( $_SERVER['REQUEST_METHOD'] ?? '' ) !== 'GET' ) {
             return;
         }
@@ -958,7 +1079,7 @@ final class YSCache {
         }
         $shared = $fastcgi || $this->edgeHtml ? $this->sharedHtmlState( $nonce, $settings['ttl_seconds'], $fastcgi ) : null;
         $complete = true;
-        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm, $fragments, $earlyOnly ): string {
+        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $directory, $key, $settings, $shared, $localContactForm, $fragments ): string {
             if ( !( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
                 $complete = false;
                 return $html;
@@ -986,62 +1107,12 @@ final class YSCache {
             }
 
             if ( $directory !== null ) {
-                if ( ! $earlyOnly ) {
-                    YSCacheStorage::write( $directory, $key, $record );
-                }
-                if ( ! $localContactForm && $this->rewriteAssetsHere() ) {
-                    $this->storeEarly( $settings, $responseHtml, $baseline );
-                }
+                YSCacheStorage::write( $directory, $key, $record );
             }
             if ( $shared !== null ) {
                 $this->releaseSharedHtml( $html, $shared );
             }
             return $responseHtml;
-        } );
-    }
-
-    private function storeEarly( array $settings, string $html, array $headers ): void {
-        if ( headers_sent() || $this->earlySnapshot === null || ! $this->requestGenerationUnchanged() || has_filter( 'ys_cache_allow_request' )
-            || has_filter( 'ys_cache_allow_html' ) || is_user_logged_in() || ! self::headersAllowCache( $headers ) ) {
-            return;
-        }
-        if ( $this->originCacheControl === null || ! in_array( $this->originCacheControl, $headers, true ) ) {
-            return;
-        }
-        $headers = array_values( array_diff( $headers, [ $this->originCacheControl ] ) );
-        if ( self::headersProhibitSharedCache( $headers ) ) {
-            return;
-        }
-        $variant = YSCacheEarlyStore::requestVariant( $_SERVER );
-        $path = YSCacheEarlyStore::requestPath( $_SERVER, $_COOKIE, YSCacheEarly::host() );
-        $ttl = YSCacheIntegrations::externalHtmlTtl( $settings['ttl_seconds'] );
-        if ( $variant !== null && $path !== null && $ttl > 0 ) {
-            $cartNonce = defined( 'YS_ECOMMERCE_VERSION' ) && YSCacheIntegrations::nonceVariant() !== null
-                ? wp_create_nonce( 'ys_ec_cart_nonce' ) : null;
-            YSCacheEarlyStore::write( YSCacheEarly::directory(), YSCacheEarly::host(), $path, $this->earlySnapshot, $headers, $html, $ttl, $variant, $cartNonce );
-        }
-    }
-
-    private function capturePixelShell( array $settings ): void {
-        $baseline = $this->htmlResponseHeaders();
-        $complete = true;
-        ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $settings ): string {
-            if ( ! ( $phase & PHP_OUTPUT_HANDLER_FINAL ) || ( $phase & PHP_OUTPUT_HANDLER_CLEAN ) ) {
-                $complete = false;
-                return $html;
-            }
-            $status = http_response_code();
-            if ( ! $complete || headers_sent() || ( $status !== false && $status !== 200 ) || $this->htmlResponseHeaders() !== $baseline
-                || ! self::isCompleteHtml( $html ) || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE )
-                || preg_match( '~<(?:script|style)\s[^>]*\bnonce\s*=~i', $html ) ) {
-                return $html;
-            }
-            $shell = YSCachePixel::shell( $html );
-            if ( $shell !== null && YSCacheIntegrations::cacheableHtml( $shell ) && apply_filters( 'ys_cache_allow_html', true, $shell ) ) {
-                $shell = YSCacheCarousel::completeHeroSources( $shell );
-                $this->storeEarly( $settings, $this->rewriteAssets( $shell, $settings['providers'] ), $baseline );
-            }
-            return $html;
         } );
     }
 
@@ -1127,6 +1198,9 @@ final class YSCache {
         if ( ! $this->frontendTemplate || ! empty( $preview ) ) {
             return $html;
         }
+        if ( $this->pendingEarly !== null ) {
+            $html = YSCacheCarousel::completeHeroSources( $html );
+        }
         $html = YSCacheProviders::rewriteHtml( $html, self::settings()['providers'] );
         if ( str_contains( $html, 'ysslide-swiper' ) ) {
             $html = YSCacheCarousel::rewriteHtml( $html );
@@ -1134,6 +1208,17 @@ final class YSCache {
         if ( $this->pendingSharedHtml !== null ) {
             $this->releaseSharedHtml( $html, $this->pendingSharedHtml, true );
             $this->pendingSharedHtml = null;
+        }
+        if ( $this->pendingEarly !== null ) {
+            // 寫入翻譯完成的 HTML；標頭與內容檢查都以翻譯後的版本重新確認。
+            $pending = $this->pendingEarly;
+            $this->pendingEarly = null;
+            $headers = headers_sent() ? null : $this->earlyHeaders( $pending['baseline'] );
+            if ( $headers !== null && $this->earlyHtmlAllowed( $html ) ) {
+                $this->storeEarly( $pending['settings'], $html, $headers );
+            } else {
+                $this->abandonEarly();
+            }
         }
         return $html;
     }

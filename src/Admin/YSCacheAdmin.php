@@ -4,11 +4,14 @@ namespace YangSheep\Cache\Admin;
 
 use YangSheep\Cache\YSCache;
 use YangSheep\Cache\YSCacheCdnDiscovery;
+use YangSheep\Cache\YSCacheEarly;
+use YangSheep\Cache\YSCacheEarlyStore;
 use YangSheep\Cache\YSCacheEnhanceIntegration;
 use YangSheep\Cache\YSCacheEnhancePurge;
 use YangSheep\Cache\YSCacheIntegrations;
 use YangSheep\Cache\YSCacheLiteSpeed;
 use YangSheep\Cache\YSCacheNginx;
+use YangSheep\Cache\YSCachePreload;
 use YangSheep\Cache\YSCacheProviders;
 use YangSheep\Cache\YSCacheStorage;
 
@@ -62,7 +65,15 @@ final class YSCacheAdmin {
         $lastAutoPurge = YSCacheEnhancePurge::lastResult();
         $forms = YSCacheIntegrations::formPlugins();
         $integrations = YSCacheIntegrations::activeModules();
+        $earlyActive = YSCacheEarly::active( $settings );
+        $earlyStats = $earlyActive ? YSCacheEarlyStore::stats( YSCacheEarly::directory() ) : null;
+        $preloadStatus = ! empty( $settings['preload'] ) && self::preloadSupports( 'status' ) ? YSCachePreload::status() : null;
         require YS_CACHE_DIR . 'templates/admin/settings.php';
+    }
+
+    /** 預載類別可能尚未載入或版本不同，呼叫前先確認方法存在。 */
+    private static function preloadSupports( string $method ): bool {
+        return class_exists( YSCachePreload::class ) && method_exists( YSCachePreload::class, $method );
     }
 
     private static function authorize(): void {
@@ -134,7 +145,8 @@ final class YSCacheAdmin {
         }
         $cdnChanged = ( $candidate['alias_hosts'] ?? [] ) !== ( $before['providers']['alias_hosts'] ?? [] ) ||
             $candidate['cdn'] !== ( $before['providers']['cdn'] ?? [] );
-        $requestRules = array_flip( [ 'enabled', 'ttl_seconds', 'early_paths', 'ttl_paths', 'public_cf7_paths', 'public_form_fragments', 'exclude_paths', 'exclude_cookies', 'exclude_agents' ] );
+        // 會改變哪些請求可以快取的設定：變更後一併清除伺服器與 CDN 層。
+        $requestRules = array_flip( [ 'enabled', 'ttl_seconds', 'early', 'serve_cart_visitors', 'ignore_params', 'ttl_paths', 'public_cf7_paths', 'public_form_fragments', 'exclude_paths', 'exclude_cookies', 'exclude_agents' ] );
         $rulesChanged = array_intersect_key( $saved, $requestRules ) !== array_intersect_key( $before, $requestRules );
         $results = $wasDelegated && ( ! $delegated ||
             YSCacheEnhanceIntegration::fingerprint( $beforeEnhance ) !==

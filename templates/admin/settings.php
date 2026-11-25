@@ -5,8 +5,6 @@ defined( 'ABSPATH' ) || exit;
 $enhance = $providers['enhance'] ?? [];
 $opcache = $providers['opcache'] ?? [];
 $opcacheReady = \YangSheep\Cache\YSCacheProviders::opcacheAvailable();
-$storefrontReady = get_template() === 'blocksy' && defined( 'PYS_VERSION' ) &&
-    defined( 'WP_CACHE' ) && WP_CACHE && ! is_multisite();
 $opcacheUnavailable = __( 'This PHP runtime must have OPcache enabled and allow WordPress to reset it.', 'ys-cache' );
 $nginxSettings = $providers['nginx'] ?? [];
 $nginxReady = ! empty( $nginx['available'] );
@@ -37,7 +35,17 @@ if ( ! is_string( $ttlUnit ) || ! isset( $ttlUnits[ $ttlUnit ] ) ) {
     $ttlUnit = 's';
 }
 $ttlFactor = $ttlUnits[ $ttlUnit ][1];
-$ttlValue = rtrim( rtrim( sprintf( '%.16F', $settings['ttl_seconds'] / $ttlFactor ), '0' ), '.' );
+// 頁面內的訪客 nonce 至少有效 12 小時，時效上限與儲存時一致；超過上限的舊設定以上限顯示。
+$ttlMaxSeconds = \YangSheep\Cache\Database\YSCacheSettingsRepo::MAX_TTL_SECONDS;
+$ttlSeconds = max( 1, min( $ttlMaxSeconds, (int) $settings['ttl_seconds'] ) );
+$ttlNumber = static fn ( float $value ): string => rtrim( rtrim( sprintf( '%.16F', $value ), '0' ), '.' );
+$ttlValue = $ttlNumber( $ttlSeconds / $ttlFactor );
+$ttlMax = $ttlNumber( $ttlMaxSeconds / $ttlFactor );
+$earlyActive = ! empty( $earlyActive );
+$earlyBlocked = ! empty( $settings['early'] ) && $localPurgeReady && ! $earlyActive;
+$preloadStatus = isset( $preloadStatus ) && is_array( $preloadStatus ) ? $preloadStatus : null;
+$earlyStats = isset( $earlyStats ) && is_array( $earlyStats ) ? $earlyStats : null;
+$ignoreParams = is_string( $settings['ignore_params'] ?? null ) ? $settings['ignore_params'] : '';
 $sections = [
     'settings' => [ __( 'Cache settings', 'ys-cache' ), 'admin-settings', [
         'html' => __( 'HTML cache', 'ys-cache' ),
@@ -226,9 +234,9 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
             <div class="ys-cache-lifetime" role="group" aria-labelledby="ys-cache-lifetime-label">
                 <label id="ys-cache-lifetime-label" for="ys-cache-lifetime"><?php esc_html_e( 'Cache lifetime', 'ys-cache' ); ?></label>
                 <div class="ys-cache-lifetime-fields">
-                    <input id="ys-cache-lifetime" name="ttl_value" type="number" min="0" max="<?php echo esc_attr( (string) intdiv( 604800, $ttlFactor ) ); ?>" step="any"
-                        value="<?php echo esc_attr( $ttlValue ); ?>" aria-describedby="ys-cache-lifetime-help"
-                        data-invalid="<?php esc_attr_e( 'Enter a lifetime of 1 second to 7 days that converts to whole seconds.', 'ys-cache' ); ?>" required>
+                    <input id="ys-cache-lifetime" name="ttl_value" type="number" min="0" max="<?php echo esc_attr( $ttlMax ); ?>" step="any"
+                        value="<?php echo esc_attr( $ttlValue ); ?>" aria-describedby="ys-cache-lifetime-help" data-max-seconds="<?php echo (int) $ttlMaxSeconds; ?>"
+                        data-invalid="<?php esc_attr_e( 'Enter a lifetime of 1 second to 12 hours that converts to whole seconds.', 'ys-cache' ); ?>" required>
                     <select name="ttl_unit" aria-label="<?php esc_attr_e( 'Time unit', 'ys-cache' ); ?>">
                         <?php foreach ( $ttlUnits as $value => [ $label, $seconds ] ) : ?>
                             <option value="<?php echo esc_attr( $value ); ?>" data-seconds="<?php echo (int) $seconds; ?>" <?php selected( $value, $ttlUnit ); ?>><?php echo esc_html( $label ); ?></option>
@@ -236,24 +244,96 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
                     </select>
                 </div>
             </div>
-            <p class="description" id="ys-cache-lifetime-help"><?php esc_html_e( 'Choose a lifetime from 1 second through 7 days. Cached HTML can expire sooner when a guest security token is due to change.', 'ys-cache' ); ?></p>
-            <label for="ys-cache-early-paths"><?php esc_html_e( 'Early guest HTML cache paths', 'ys-cache' ); ?></label>
-            <textarea id="ys-cache-early-paths" name="early_paths" rows="2" maxlength="12000" placeholder="/"><?php echo esc_textarea( $settings['early_paths'] ?? '' ); ?></textarea>
-            <p class="description"><?php esc_html_e( 'Enter one exact public path per line. Eligible HTTPS requests can serve HTML before WordPress starts. Choose pages with the same public content for anonymous visitors. Requires WP_CACHE.', 'ys-cache' ); ?></p>
+            <p class="description" id="ys-cache-lifetime-help"><?php esc_html_e( 'Choose a lifetime from 1 second through 12 hours. The 12-hour cap keeps guest security tokens (nonces) in cached pages valid, and cached HTML can expire sooner for the same reason.', 'ys-cache' ); ?></p>
+            <h3><?php esc_html_e( 'Early cache', 'ys-cache' ); ?></h3>
             <label class="ys-cache-switch">
-                <input name="early_pixel_shell" type="checkbox" role="switch" <?php checked( ! empty( $settings['early_pixel_shell'] ) ); ?>>
+                <input name="early" type="checkbox" role="switch" aria-describedby="ys-cache-early-help<?php echo $earlyBlocked ? ' ys-cache-early-inactive' : ''; ?>" <?php checked( ! empty( $settings['early'] ) ); ?>>
                 <span class="ys-cache-switch-track" aria-hidden="true"></span>
-                <?php esc_html_e( 'Load private PixelYourSite tracking separately on supported direct homepage visits (beta)', 'ys-cache' ); ?>
+                <?php esc_html_e( 'Serve cached pages before WordPress loads', 'ys-cache' ); ?>
             </label>
-            <label class="ys-cache-switch">
-                <input name="guest_template" type="checkbox" role="switch" <?php checked( ! empty( $settings['guest_template'] ) ); ?> <?php disabled( ! $storefrontReady ); ?>>
-                <span class="ys-cache-switch-track" aria-hidden="true"></span>
-                <?php esc_html_e( 'Cache public Blocksy storefront content with PixelYourSite (beta)', 'ys-cache' ); ?>
-            </label>
-            <p class="description"><?php esc_html_e( 'On compatible guest visits, WordPress reuses the public page content and renders the header, footer, and tracking for the current visitor. Cart, checkout, and account pages stay private.', 'ys-cache' ); ?></p>
-            <?php if ( ! $storefrontReady ) : ?>
-                <p class="description"><?php esc_html_e( 'Requires Blocksy, PixelYourSite, and WP_CACHE on a single-site installation.', 'ys-cache' ); ?></p>
+            <p class="description" id="ys-cache-early-help"><?php
+                printf(
+                    /* translators: %s: examples of ignored tracking parameters. */
+                    esc_html__( 'Covers all public pages. Logged-in users and visitors with a cart, wishlist, currency selection, or saved comment details still go to WordPress. Tracking parameters such as %s are ignored. Desktop and phone versions are cached separately.', 'ys-cache' ),
+                    implode( esc_html( wp_get_list_item_separator() ), [ '<code>utm_*</code>', '<code>fbclid</code>', '<code>gclid</code>' ] )
+                );
+            ?></p>
+            <?php if ( $earlyBlocked ) : ?>
+                <p class="description" id="ys-cache-early-inactive"><?php esc_html_e( 'The early cache is not running. It requires HTTPS, WP_CACHE enabled in wp-config.php, a single-site installation, and an advanced-cache.php file that YS CACHE can manage. It also stays off while a CDN layer caches HTML or TranslatePress automatic language detection is active.', 'ys-cache' ); ?></p>
             <?php endif; ?>
+            <label class="ys-cache-switch">
+                <input name="serve_cart_visitors" type="checkbox" role="switch" aria-describedby="ys-cache-cart-visitors-help" <?php checked( ! empty( $settings['serve_cart_visitors'] ) ); ?>>
+                <span class="ys-cache-switch-track" aria-hidden="true"></span>
+                <?php esc_html_e( 'Serve cached pages to shoppers with items in the cart', 'ys-cache' ); ?>
+            </label>
+            <p class="description" id="ys-cache-cart-visitors-help"><?php esc_html_e( 'WooCommerce cart fragments refresh the mini cart after the page loads. Leave this off if the theme shows cart-dependent prices or messages on catalog pages.', 'ys-cache' ); ?></p>
+            <label class="ys-cache-switch">
+                <input name="preload" type="checkbox" role="switch" aria-describedby="ys-cache-preload-help<?php echo $preloadStatus !== null || $earlyStats !== null ? ' ys-cache-preload-status' : ''; ?>" <?php checked( ! empty( $settings['preload'] ) ); ?>>
+                <span class="ys-cache-switch-track" aria-hidden="true"></span>
+                <?php esc_html_e( 'Preload public pages (desktop and phone)', 'ys-cache' ); ?>
+            </label>
+            <p class="description" id="ys-cache-preload-help"><?php esc_html_e( 'WordPress Cron renders public pages in the background after purges and before cached copies expire. Cache hits do not start WP-Cron, so run it from a server cron job when most visits are cached.', 'ys-cache' ); ?></p>
+            <?php if ( $preloadStatus !== null || $earlyStats !== null ) : ?>
+                <div id="ys-cache-preload-status" data-preload-status>
+                    <?php if ( $preloadStatus !== null ) : ?>
+                        <?php
+                        $preloadPending = number_format_i18n( max( 0, (int) ( $preloadStatus['pending'] ?? 0 ) ) );
+                        $preloadLastRun = (int) ( $preloadStatus['last_run'] ?? 0 );
+                        $preloadRendered = max( 0, (int) ( $preloadStatus['last_rendered'] ?? 0 ) );
+                        $preloadError = is_string( $preloadStatus['last_error'] ?? null ) ? trim( $preloadStatus['last_error'] ) : '';
+                        ?>
+                        <p class="description"><?php
+                            if ( $preloadLastRun > 0 ) {
+                                echo esc_html( sprintf(
+                                    /* translators: 1: number of pages waiting to preload, 2: date and time, 3: number of pages rendered. */
+                                    _n( 'Preload queue: %1$s pending. Last run: %2$s, %3$s page rendered.', 'Preload queue: %1$s pending. Last run: %2$s, %3$s pages rendered.', $preloadRendered, 'ys-cache' ),
+                                    $preloadPending,
+                                    wp_date( 'Y-m-d H:i:s', $preloadLastRun ),
+                                    number_format_i18n( $preloadRendered )
+                                ) );
+                            } else {
+                                /* translators: %s: number of pages waiting to preload. */
+                                echo esc_html( sprintf( __( 'Preload queue: %s pending. Preload has not run yet.', 'ys-cache' ), $preloadPending ) );
+                            }
+                        ?></p>
+                        <?php if ( ! empty( $preloadStatus['full'] ) ) : ?>
+                            <p class="description"><?php esc_html_e( 'A full preload of all public pages starts on the next run.', 'ys-cache' ); ?></p>
+                        <?php endif; ?>
+                        <?php if ( $preloadError !== '' ) : ?>
+                            <p class="description" data-preload-error><?php
+                                /* translators: %s: error message from the last preload run. */
+                                echo esc_html( sprintf( __( 'Last preload error: %s', 'ys-cache' ), $preloadError ) );
+                            ?></p>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                    <?php if ( $earlyStats !== null ) : ?>
+                        <?php $earlyEntries = max( 0, (int) ( $earlyStats['entries'] ?? 0 ) ); ?>
+                        <p class="description"><?php
+                            echo esc_html( sprintf(
+                                /* translators: 1: number of cached page entries, 2: storage size such as 2 MB. */
+                                _n( 'Early cache storage: %1$s entry, %2$s.', 'Early cache storage: %1$s entries, %2$s.', $earlyEntries, 'ys-cache' ),
+                                number_format_i18n( $earlyEntries ),
+                                size_format( max( 0, (int) ( $earlyStats['bytes'] ?? 0 ) ), 1 )
+                            ) );
+                        ?></p>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+            <div class="ys-cache-grid ys-cache-asset-exclusions">
+                <label for="ys-cache-ignore-params"><?php esc_html_e( 'Additional ignored query parameters', 'ys-cache' ); ?>
+                    <textarea id="ys-cache-ignore-params" name="ignore_params" rows="3" maxlength="12000" placeholder="example_campaign" aria-describedby="ys-cache-ignore-params-help"><?php echo esc_textarea( $ignoreParams ); ?></textarea>
+                </label>
+            </div>
+            <p class="description" id="ys-cache-ignore-params-help"><?php
+                printf(
+                    /* translators: %s: examples of built-in ignored tracking parameters. */
+                    esc_html__( 'Enter one parameter name per line. Like the built-in tracking parameters, such as %s, they are ignored when looking up a cached page. Add only parameters that PHP never reads; referral, coupon, and currency links must reach WordPress.', 'ys-cache' ),
+                    implode( esc_html( wp_get_list_item_separator() ), array_map(
+                        static fn ( string $name ): string => '<code>' . $name . '</code>',
+                        [ 'utm_source', 'fbclid', 'gclid', 'gbraid', 'msclkid', 'ttclid', 'srsltid' ]
+                    ) )
+                );
+            ?></p>
             <h3><?php esc_html_e( 'Automatic purge', 'ys-cache' ); ?></h3>
             <label class="ys-cache-switch">
                 <input name="auto_purge" type="checkbox" role="switch" <?php checked( ! empty( $settings['auto_purge'] ) ); ?>>
@@ -583,6 +663,7 @@ $renderRow = static function ( array $row, ?int $index = null ) use ( $credentia
             ?></p>
             <h3><?php esc_html_e( 'Check a front-end cache hit', 'ys-cache' ); ?></h3>
             <p><?php esc_html_e( 'In a private browser window, open Developer Tools → Network and reload the page twice. Select the main document and check X-YS-Cache in Response Headers. HIT means YS CACHE served HTML. X-FastCGI-Cache describes the server cache separately.', 'ys-cache' ); ?></p>
+            <p><?php esc_html_e( 'With the early cache, X-YS-Cache-Engine: early means the page was sent before WordPress loaded. When a request goes to WordPress instead, X-YS-Cache-Early shows the reason, such as cookie, query, or miss.', 'ys-cache' ); ?></p>
             <h3><?php esc_html_e( 'Load a form separately', 'ys-cache' ); ?></h3>
             <p><?php esc_html_e( 'Place the form on a separate page on this site, add its path under Paths, then embed that page in an iframe on the public page. The form loads with its own scripts and visitor state.', 'ys-cache' ); ?></p>
         </section>

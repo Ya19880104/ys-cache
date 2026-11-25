@@ -193,6 +193,7 @@ namespace {
             return 1;
         }
     };
+    require dirname(__DIR__) . '/src/Database/YSCacheSettingsRepo.php';
     require dirname(__DIR__) . '/src/YSCacheProviders.php';
     require dirname(__DIR__) . '/src/Migration/YSCacheImportSettings.php';
     require dirname(__DIR__) . '/src/Migration/YSCacheMigrationState.php';
@@ -202,8 +203,8 @@ namespace {
         'cache_reject_uri' => ['/saved/(.*)', '/%E7%B6%B2%E9%A0%81/', 'https://sample.test/catalog/'],
         'cache_reject_cookies' => ['fixture_login'],
         'cache_reject_ua' => ['(.*)Spider(.*)'],
-        'purge_cron_interval' => 2,
-        'purge_cron_unit' => 'DAY_IN_SECONDS',
+        'purge_cron_interval' => 10,
+        'purge_cron_unit' => 'HOUR_IN_SECONDS',
         'do_cloudflare' => 1,
         'cloudflare_zone_id' => str_repeat('a', 32),
         'cloudflare_email' => 'owner@example.com',
@@ -253,7 +254,7 @@ namespace {
     verify(is_plugin_active(CORE_FILE) && !is_plugin_active(SOURCE_PLUGIN_FILE) && $cache_settings['enabled'], 'correct active set on successful cutover');
     verify($config_preserved && !$filters && !$cron && !YSCacheImport::pending(), 'configuration flag and recovery record after success');
     $result = YSCacheImport::lastResult();
-    verify($result['state'] === 'success' && $cache_settings['ttl_seconds'] === 172800 && !isset($cache_settings['ttl']) && !$result['warnings'], 'persisted result and second-based lifetime');
+    verify($result['state'] === 'success' && $cache_settings['ttl_seconds'] === 36000 && !isset($cache_settings['ttl']) && !$result['warnings'], 'persisted result and second-based lifetime');
     verify($cache_settings['exclude_paths'] === "/saved/*\n/網頁/\n/catalog/", 'path conversion');
     verify($cache_settings['exclude_cookies'] === 'fixture_login', 'cookie conversion');
     verify($cache_settings['exclude_agents'] === 'Spider', 'user agent conversion');
@@ -360,7 +361,7 @@ namespace {
     $result = YSCacheImportSettings::convert(['purge_cron_interval' => '0.001', 'purge_cron_unit' => 'SECOND_IN_SECONDS'], []);
     verify($result['settings']['ttl_seconds'] === 1, 'positive subsecond lifetimes retain a one-second minimum');
     $result = YSCacheImportSettings::convert(['purge_cron_interval' => 8, 'purge_cron_unit' => 'DAY_IN_SECONDS'], []);
-    verify($result['settings']['ttl_seconds'] === 604800 && count($result['warnings']) === 1, 'long lifetimes are capped at seven days');
+    verify($result['settings']['ttl_seconds'] === 43200 && count($result['warnings']) === 1, 'long lifetimes are capped at 12 hours');
     $result = YSCacheImportSettings::convert(['purge_cron_interval' => 0], ['ttl' => 37]);
     verify($result['settings']['ttl_seconds'] === 2220 && !isset($result['settings']['ttl']), 'legacy lifetime survives an indefinite source value');
 

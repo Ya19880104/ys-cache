@@ -36,12 +36,7 @@ final class YSCacheEarly {
             }
         } );
         add_action( 'upgrader_process_complete', static function (): void { self::invalidate(); }, 10, 0 );
-        add_action( 'post_updated', static function ( $id, $after, $before ): void {
-            if ( ( $after->post_password !== $before->post_password || $after->post_status !== $before->post_status )
-                && is_post_type_viewable( $after->post_type ) ) {
-                self::invalidate();
-            }
-        }, 10, 3 );
+        // 文章上架、下架、改密碼由 YSCacheInvalidation 依範圍清除（含變更前的網址、彙整與分類），這裡不再清全站。
     }
 
     public static function owned(): bool {
@@ -267,6 +262,10 @@ final class YSCacheEarly {
 
     public static function invalidate( ?string $path = null ): bool {
         if ( ! self::owned() ) {
+            return true;
+        }
+        // 儲存區不會存放這種路徑（例如含 ; 或 %2f），沒有項目需要清除；不要因此卸下 drop-in。
+        if ( $path !== null && ! YSCacheEarlyStore::purgeablePath( $path ) ) {
             return true;
         }
         $directory = self::directory();

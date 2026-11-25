@@ -22,7 +22,8 @@
     const lifetime = form.elements.namedItem('ttl_value');
     const lifetimeUnit = form.elements.namedItem('ttl_unit');
     const lifetimeFactors = Object.fromEntries(Array.from(lifetimeUnit.options, (option) => [option.value, Number(option.dataset.seconds)]));
-    const maxLifetime = 604800;
+    // 與 YSCacheSettingsRepo::MAX_TTL_SECONDS 相同，確保快取頁面內的訪客 nonce 仍然有效。
+    const maxLifetime = Number(lifetime.dataset.maxSeconds) || 43200;
     let previousUnit = lifetimeUnit.value;
 
     const read = (field) => field.type === 'checkbox' ? field.checked : field.value;
@@ -263,9 +264,10 @@
                 auto_purge: field('auto_purge'),
                 auto_detect: field('auto_detect'),
                 exclude_paths: field('exclude_paths'),
-                early_paths: field('early_paths'),
-                early_pixel_shell: field('early_pixel_shell'),
-                guest_template: field('guest_template'),
+                early: field('early'),
+                serve_cart_visitors: field('serve_cart_visitors'),
+                preload: field('preload'),
+                ignore_params: field('ignore_params'),
                 exclude_cookies: field('exclude_cookies'),
                 exclude_agents: field('exclude_agents'),
                 ttl_paths: field('ttl_paths'),

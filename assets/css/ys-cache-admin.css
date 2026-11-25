@@ -252,7 +252,8 @@
 }
 
 .ys-cache-status:not(:empty) { margin-block: 10px; padding: 10px 12px; border-inline-start: 4px solid #247554; background: #e2efea; }
-.ys-cache-status.ys-cache-error, .ys-cache-results [data-status="error"], .ys-cache-admin [data-enhance-status].ys-cache-error { color: #8c2525; }
+.ys-cache-status.ys-cache-error, .ys-cache-results [data-status="error"], .ys-cache-admin [data-enhance-status].ys-cache-error, .ys-cache-admin [data-preload-error] { color: #8c2525; }
+.ys-cache-admin [data-preload-status] .description { margin-block: 4px; }
 .ys-cache-status.ys-cache-error { border-color: #a72d2d; background: #fae8e8; }
 .ys-cache-results:empty, .ys-cache-admin [hidden] { display: none; }
 .ys-cache-admin [data-enhance-paths] { max-height: 180px; overflow: auto; }

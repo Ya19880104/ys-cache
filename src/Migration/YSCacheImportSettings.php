@@ -2,13 +2,15 @@
 
 namespace YangSheep\Cache\Migration;
 
+use YangSheep\Cache\Database\YSCacheSettingsRepo;
 use YangSheep\Cache\YSCacheProviders;
 
 defined('ABSPATH') || exit;
 
 final class YSCacheImportSettings
 {
-    private const MAX_LIFETIME_SECONDS = 604800;
+    /** 與 YS CACHE 的壽命上限一致：快取頁裡的訪客 nonce 至少有效 12 小時。 */
+    private const MAX_LIFETIME_SECONDS = YSCacheSettingsRepo::MAX_TTL_SECONDS;
 
     public static function convert(array $source, array $current): array
     {
@@ -47,7 +49,7 @@ final class YSCacheImportSettings
             $seconds = (float) $interval * $units[$unit];
             $current['ttl_seconds'] = self::lifetime($seconds);
             if ($seconds > self::MAX_LIFETIME_SECONDS) {
-                $warnings[] = __('The imported cache lifetime exceeded seven days. YS CACHE applied its seven-day limit.', 'ys-cache');
+                $warnings[] = __('The imported cache lifetime exceeded 12 hours. YS CACHE applied its 12-hour limit so visitor nonces in cached pages stay valid.', 'ys-cache');
             }
         } else {
             $warnings[] = __('The previous cache had no expiry. The existing YS CACHE lifetime was kept.', 'ys-cache');
