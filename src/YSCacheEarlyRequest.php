@@ -190,11 +190,20 @@ final class YSCacheEarlyRequest {
             if ( $suggested === null ) {
                 return null;
             }
-            if ( $suggested !== '' ) {
+            // 建議語言與頁面語言相同時不會出現語言建議，和沒有建議的訪客共用同一份。
+            if ( $suggested !== '' && strcasecmp( $suggested, self::pageLanguage( (string) ( $server['REQUEST_URI'] ?? '' ), $config ) ) !== 0 ) {
                 $variant .= '-' . strtolower( $suggested );
             }
         }
         return $variant;
+    }
+
+    /** 依網址第一段（TranslatePress 語言代碼）判斷頁面語言；沒有前綴時為預設語言。 */
+    public static function pageLanguage( string $uri, array $config ): string {
+        $slugs = (array) ( $config['language_slugs'] ?? [] );
+        $path = explode( '?', $uri, 2 )[0];
+        $first = strtolower( rawurldecode( explode( '/', ltrim( $path, '/' ), 2 )[0] ) );
+        return isset( $slugs[ $first ] ) && is_string( $slugs[ $first ] ) ? $slugs[ $first ] : (string) ( $config['default_language'] ?? '' );
     }
 
     /** 與 WordPress 核心 wp_is_mobile() 相同的判斷（JetElements 等外掛直接依此輸出不同內容）。 */

@@ -118,16 +118,39 @@ final class YSCacheEarly {
         }
         $writer = (array) apply_filters( 'ys_cache_writer_cookie_prefixes', YSCacheEarlyRequest::ANALYTICS_COOKIES );
         $session = function_exists( 'session_name' ) ? (string) session_name() : '';
+        $languages = self::suggestionLanguages();
+        [ $slugs, $default ] = $languages ? self::languagePaths( $languages ) : [ [], '' ];
         return self::$config = [
-            'directory'      => self::directory(),
-            'host'           => self::host(),
-            'deny_cookies'   => array_values( array_unique( array_filter( $deny, 'is_string' ) ) ),
-            'deny_agents'    => self::lines( $settings['exclude_agents'] ?? '' ),
-            'ignore_params'  => array_values( array_unique( $ignore ) ),
-            'languages'      => self::suggestionLanguages(),
-            'writer_cookies' => array_values( array_filter( $writer, static fn ( $prefix ): bool => is_string( $prefix ) && $prefix !== '' ) ),
-            'session_name'   => $session !== '' ? $session : 'PHPSESSID',
+            'directory'        => self::directory(),
+            'host'             => self::host(),
+            'deny_cookies'     => array_values( array_unique( array_filter( $deny, 'is_string' ) ) ),
+            'deny_agents'      => self::lines( $settings['exclude_agents'] ?? '' ),
+            'ignore_params'    => array_values( array_unique( $ignore ) ),
+            'languages'        => $languages,
+            'language_slugs'   => $slugs,
+            'default_language' => $default,
+            'writer_cookies'   => array_values( array_filter( $writer, static fn ( $prefix ): bool => is_string( $prefix ) && $prefix !== '' ) ),
+            'session_name'     => $session !== '' ? $session : 'PHPSESSID',
         ];
+    }
+
+    /**
+     * TranslatePress 的網址語言前綴（小寫 slug => 語言代碼）與預設語言，用來判斷頁面語言。
+     *
+     * @return array{0:array<string,string>,1:string}
+     */
+    private static function languagePaths( array $languages ): array {
+        $settings = (array) get_option( 'trp_settings', [] );
+        $default = is_string( $settings['default-language'] ?? null ) ? $settings['default-language'] : '';
+        $prefixDefault = ( $settings['add-subdirectory-to-default-language'] ?? 'no' ) === 'yes';
+        $slugs = [];
+        foreach ( $languages as $code ) {
+            $slug = $settings['url-slugs'][ $code ] ?? '';
+            if ( is_string( $slug ) && $slug !== '' && preg_match( '~\A[a-zA-Z0-9_-]{1,32}\z~', $slug ) && ( $code !== $default || $prefixDefault ) ) {
+                $slugs[ strtolower( $slug ) ] = $code;
+            }
+        }
+        return [ $slugs, $default ];
     }
 
     /** YS TranslatePress Addons 依 Accept-Language 顯示語言建議時，以建議語言區分變體。 */
@@ -196,6 +219,8 @@ final class YSCacheEarly {
             'deny_agents'   => $config['deny_agents'],
             'ignore_params' => $config['ignore_params'],
             'languages'     => $config['languages'],
+            'language_slugs' => $config['language_slugs'],
+            'default_language' => $config['default_language'],
             'policy_file'   => $policy,
             'policy_digest' => $digest,
         ];

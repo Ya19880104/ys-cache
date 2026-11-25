@@ -235,6 +235,18 @@ final class YSCachePreload {
         ];
     }
 
+    /**
+     * 預載以頁面本身的語言送出 Accept-Language：多語網站（YS TranslatePress Addons 語言建議）會產生
+     * 「不顯示語言建議」的基本版本，也就是瀏覽器語言與頁面相同的訪客會命中的那一份。
+     */
+    public static function pathLocale( string $path, array $config, string $fallback ): string {
+        if ( empty( $config['languages'] ) ) {
+            return $fallback;
+        }
+        $language = YSCacheEarlyRequest::pageLanguage( $path, $config );
+        return $language !== '' ? $language : $fallback;
+    }
+
     /** 由網站語系產生 Accept-Language，例如 zh_TW → zh-TW,zh;q=0.9。 */
     public static function acceptLanguage( string $locale ): string {
         if ( ! preg_match( '~\A([a-zA-Z]{2,3})(?:[_-]([a-zA-Z0-9]{2,8}))?(?:[_-]|\z)~', $locale, $parts ) ) {
@@ -292,12 +304,13 @@ final class YSCachePreload {
             $config = YSCacheEarly::config( $settings );
             $locale = (string) get_locale();
             $fresh = static function ( string $path, string $device ) use ( $directory, $host, $config, $locale, $freshness ): bool {
-                $variant = YSCacheEarlyRequest::variant( self::server( $device, $locale ), $config );
+                $server = self::server( $device, self::pathLocale( $path, $config, $locale ) ) + [ 'REQUEST_URI' => $path ];
+                $variant = YSCacheEarlyRequest::variant( $server, $config );
                 return $variant !== null && YSCacheEarlyStore::fresh( $directory, $host, $path, $variant, $freshness );
             };
-            $fetch = static function ( string $path, string $device ) use ( $host, $locale ): array {
+            $fetch = static function ( string $path, string $device ) use ( $host, $config, $locale ): array {
                 $started = microtime( true );
-                $response = wp_remote_get( 'https://' . $host . $path, self::requestArgs( $device, self::sign( $path, time(), wp_salt( 'auth' ) ), $locale ) );
+                $response = wp_remote_get( 'https://' . $host . $path, self::requestArgs( $device, self::sign( $path, time(), wp_salt( 'auth' ) ), self::pathLocale( $path, $config, $locale ) ) );
                 $seconds = microtime( true ) - $started;
                 if ( is_wp_error( $response ) ) {
                     return [ 'status' => 0, 'error' => $response->get_error_message(), 'seconds' => $seconds ];

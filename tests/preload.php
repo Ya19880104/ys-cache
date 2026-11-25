@@ -408,6 +408,14 @@ namespace {
         expect_same( false, Preload::fullDue( $full, $now + 10, '' ), 'An unreadable generation does not force a refresh' );
         expect_same( true, Preload::fullDue( Preload::withQueued( $full, [], true ), $now + 10, $epoch ), 'Refresh when requested' );
         expect_same( [ 3600, 5400 ], Preload::timing( 36000 ), 'A 10-hour lifetime refreshes hourly and renews pages with less than 90 minutes left' );
+        $multilingual = [ 'languages' => [ 'en_US', 'zh_TW' ], 'language_slugs' => [ 'zh-tw' => 'zh_TW' ], 'default_language' => 'en_US' ];
+        expect_same( 'zh_TW', Preload::pathLocale( '/zh-tw/shop/', $multilingual, 'en_US' ), 'Preload translated pages in their own language' );
+        expect_same( 'en_US', Preload::pathLocale( '/shop/', $multilingual, 'zh_TW' ), 'Preload default-language pages in the default language' );
+        expect_same( 'zh_TW', Preload::pathLocale( '/shop/', [], 'zh_TW' ), 'Single-language sites use the site locale' );
+        $preloadVariant = static fn ( string $path, string $device ): ?string => YangSheep\Cache\YSCacheEarlyRequest::variant(
+            Preload::server( $device, Preload::pathLocale( $path, $multilingual, 'en_US' ) ) + [ 'REQUEST_URI' => $path ], $multilingual );
+        expect_same( [ 'd', 'm', 'd', 'm' ], [ $preloadVariant( '/shop/', 'd' ), $preloadVariant( '/shop/', 'm' ), $preloadVariant( '/zh-tw/shop/', 'd' ), $preloadVariant( '/zh-tw/shop/', 'm' ) ],
+            'Preloaded pages are the shared no-suggestion variants that same-language visitors hit' );
         expect_same( [ 450, 675 ], Preload::timing( 900 ), 'A 15-minute lifetime shortens both so pages never expire between refreshes' );
         expect_same( [ 300, 360 ], Preload::timing( 120 ), 'Very short lifetimes still wait 5 minutes between full refreshes' );
         expect_same( true, Preload::fullDue( $full, $now + 450, $epoch, 450 ), 'Short lifetimes refresh sooner' );

@@ -119,6 +119,17 @@ expect_same( 'd-zh_tw', Request::variant( [ 'HTTP_USER_AGENT' => $desktop, 'HTTP
 expect_same( 'd-en_us', Request::variant( [ 'HTTP_USER_AGENT' => $desktop, 'HTTP_ACCEPT_LANGUAGE' => 'en-GB,en;q=0.9' ], $languages ), 'Match the primary language' );
 expect_same( 'd', Request::variant( [ 'HTTP_USER_AGENT' => $desktop, 'HTTP_ACCEPT_LANGUAGE' => 'ja-JP' ], $languages ), 'No suggestion for unpublished languages' );
 expect_same( null, Request::variant( [ 'HTTP_USER_AGENT' => $desktop, 'HTTP_ACCEPT_LANGUAGE' => "zh\xff" ], $languages ), 'Reject malformed language headers' );
+// 語言建議與頁面語言相同時不顯示建議，和沒有建議的訪客共用同一份。
+$tp = [ 'languages' => [ 'en_US', 'zh_TW' ], 'language_slugs' => [ 'zh-tw' => 'zh_TW' ], 'default_language' => 'en_US' ];
+$page = static fn ( string $agent, string $language, string $uri ): ?string => Request::variant( [ 'HTTP_USER_AGENT' => $agent, 'HTTP_ACCEPT_LANGUAGE' => $language, 'REQUEST_URI' => $uri ], $tp );
+expect_same( 'd', $page( $desktop, 'en-US,en;q=0.9', '/shop/' ), 'No suggestion when the browser matches the default-language page' );
+expect_same( 'd-zh_tw', $page( $desktop, 'zh-TW,zh;q=0.9', '/shop/' ), 'Suggest Chinese on an English page' );
+expect_same( 'd', $page( $desktop, 'zh-TW,zh;q=0.9', '/zh-tw/shop/' ), 'No suggestion on the Chinese page for a Chinese browser' );
+expect_same( 'm-en_us', $page( $iphone, 'en-US,en;q=0.9', '/zh-tw/' ), 'Suggest English on the Chinese page' );
+expect_same( 'd', $page( $desktop, 'ja-JP', '/zh-tw/' ), 'No suggestion for unpublished languages on translated pages' );
+expect_same( 'zh_TW', Request::pageLanguage( '/ZH-TW/product/x/?utm_source=a', $tp ), 'Language prefixes are case-insensitive and ignore the query' );
+expect_same( 'en_US', Request::pageLanguage( '/zh-twx/', $tp ), 'Only exact prefixes select a language' );
+expect_same( '', Request::pageLanguage( '/zh-tw/', [] ), 'Sites without TranslatePress have no page language' );
 
 // 寫入端只接受乾淨請求。
 expect_same( [ 'path' => '/product-category/soap/', 'variant' => 'd' ], Request::writerPath( $request, [], $config ), 'Write from a cookieless request' );
