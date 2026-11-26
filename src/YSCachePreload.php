@@ -106,7 +106,7 @@ final class YSCachePreload {
     public static function enqueuePaths( array $paths ): void {
         foreach ( $paths as $path ) {
             if ( is_string( $path ) && self::validPath( $path ) ) {
-                self::$queued[ $path ] = true;
+                self::$queued[ YSCacheEarlyStore::canonicalPath( $path ) ] = true;
             }
         }
         if ( self::$queued ) {
@@ -190,9 +190,12 @@ final class YSCachePreload {
         return self::$preloadRequest = self::verify( $_SERVER, wp_salt( 'auth' ), time() );
     }
 
-    /** 簽章：<unix>.<HMAC-SHA256("ys-cache-preload|<unix>|<path>")>。 */
+    /**
+     * 簽章：<unix>.<HMAC-SHA256("ys-cache-preload|<unix>|<標準路徑>")>。
+     * 以標準路徑簽章：WordPress 的 HTTP 函式庫送出前會把 %e6 改成 %E6，伺服器端收到的寫法不同但仍是同一個網址。
+     */
     public static function sign( string $path, int $time, string $key ): string {
-        return $time . '.' . hash_hmac( 'sha256', 'ys-cache-preload|' . $time . '|' . $path, $key );
+        return $time . '.' . hash_hmac( 'sha256', 'ys-cache-preload|' . $time . '|' . YSCacheEarlyStore::canonicalPath( $path ), $key );
     }
 
     /** 驗證預載標頭：300 秒內、GET 或 HEAD、無查詢字串，且簽章對應這次的請求路徑。 */
@@ -557,7 +560,12 @@ final class YSCachePreload {
                 continue;
             }
             $path = $item[0] === '/' ? $item : self::sitePath( $item, $host );
-            if ( $path !== null && self::validPath( $path ) && ! isset( $paths[ $path ] ) && ! self::excluded( $excludePaths, $path ) ) {
+            if ( $path === null || ! self::validPath( $path ) ) {
+                continue;
+            }
+            // 與早期儲存區相同的標準路徑：大小寫不同的百分比編碼只排入一次。
+            $path = YSCacheEarlyStore::canonicalPath( $path );
+            if ( ! isset( $paths[ $path ] ) && ! self::excluded( $excludePaths, $path ) ) {
                 $paths[ $path ] = true;
             }
         }

@@ -166,12 +166,16 @@ namespace {
         return $response['response']['code'] ?? '';
     }
 
-    /** 模擬本機回送：伺服器端驗證簽章，寫入端只在乾淨請求時依請求的裝置寫入早期儲存區。 */
+    /**
+     * 模擬本機回送：伺服器端驗證簽章，寫入端只在乾淨請求時依請求的裝置寫入早期儲存區。
+     * 與 WordPress 的 HTTP 函式庫（Requests 的 IRI 正規化）相同，送出的網址百分比編碼一律是大寫。
+     */
     function wp_remote_get( string $url, array $args ) {
         $GLOBALS['remote'][] = [ $url, $args ];
         $parts = parse_url( $url );
+        $sent = (string) preg_replace_callback( '~%[0-9a-f]{2}~i', static fn ( array $octet ): string => strtoupper( $octet[0] ), $parts['path'] );
         $server = [
-            'REQUEST_METHOD' => 'GET', 'HTTPS' => 'on', 'HTTP_HOST' => $parts['host'], 'REQUEST_URI' => $parts['path'],
+            'REQUEST_METHOD' => 'GET', 'HTTPS' => 'on', 'HTTP_HOST' => $parts['host'], 'REQUEST_URI' => $sent,
             'HTTP_USER_AGENT' => $args['user-agent'], 'HTTP_ACCEPT' => $args['headers']['Accept'],
             'HTTP_ACCEPT_LANGUAGE' => $args['headers']['Accept-Language'], 'HTTP_SEC_CH_UA_MOBILE' => $args['headers']['Sec-CH-UA-Mobile'],
             Request::PRELOAD_HEADER => $args['headers']['X-YS-Cache-Preload'],
@@ -245,6 +249,13 @@ namespace {
         expect_same( false, Preload::verify( $signed, 'another-site-salt', $now ), 'Reject a token signed with another key' );
         expect_same( false, Preload::verify( $signed, '', $now ), 'Reject when no key is available' );
         expect_same( false, Preload::verify( array_diff_key( $signed, [ Request::PRELOAD_HEADER => true ] ), $key, $now ), 'Reject a request without the header' );
+        // WordPress 的 HTTP 函式庫（Requests）送出前把百分比編碼改成大寫：以小寫固定網址簽章的預載仍要通過驗證。
+        $lowerPath = '/product-category/%e6%89%8b%e5%b7%a5%e7%9a%82/';
+        $upperPath = '/product-category/%E6%89%8B%E5%B7%A5%E7%9A%82/';
+        $loopback = [ 'REQUEST_METHOD' => 'GET', 'REQUEST_URI' => $upperPath, Request::PRELOAD_HEADER => Preload::sign( $lowerPath, $now, $key ) ];
+        expect_same( true, Preload::verify( $loopback, $key, $now ), 'Accept a loopback whose percent-encoding the HTTP library uppercased' );
+        expect_same( Preload::sign( $lowerPath, $now, $key ), Preload::sign( $upperPath, $now, $key ), 'Sign the canonical path' );
+        expect_same( false, Preload::verify( array_replace( $signed, [ 'REQUEST_URI' => '/Product/soap/' ] ), $key, $now ), 'Letter case outside percent-encoding is still another path' );
 
         // register()：掛上排程、清除事件，並讓有效的預載請求不建立 PixelYourSite session（同一請求只判斷一次）。
         $_SERVER['REQUEST_METHOD'] = 'GET';
@@ -305,10 +316,12 @@ namespace {
         $encoded = '/%E6%89%8B%E5%B7%A5%E7%9A%82/';
         $exclude = "/members/*\n/private-page/\n/sale-*\n/手工皂/禮盒/*";
         // 與 YSCache 相同：/private-page/ 不排除沒有結尾斜線的 /private-page（WordPress 會轉址到有斜線的網址）。
-        expect_same( [ '/', '/shop/', '/product/soap/', '/private-page', $encoded ], Preload::sitePaths( [
+        // 百分比編碼統一成小寫的標準路徑，大小寫不同的同一頁只排入一次。
+        expect_same( [ '/', '/shop/', '/product/soap/', '/private-page', strtolower( $encoded ) ], Preload::sitePaths( [
             'https://store.example.test/', 'https://store.example.test/shop/', 'https://store.example.test/shop/', '/product/soap/',
             'https://store.example.test/members', 'https://store.example.test/members/vip/', 'https://store.example.test/private-page/',
             'https://store.example.test/private-page', 'https://store.example.test/sale-2026/', 'https://store.example.test' . $encoded,
+            strtolower( $encoded ),
             'https://store.example.test' . $encoded . '%E7%A6%AE%E7%9B%92/', 'https://store.example.test/cart/?x=1', false, null, 12, '',
             '//evil.example/x/', '/wp-json/wc/store/', '/' . str_repeat( 'a', 600 ) . '/',
         ], $host, $exclude, 2000 ), 'Keep unique, servable, non-excluded paths' );
@@ -585,6 +598,16 @@ namespace {
         Store::invalidateAll( $directory );
         Preload::run();
         expect_same( 6, count( $GLOBALS['remote'] ), 'Refill everything after a site-wide generation change' );
+        // 中文網址：WordPress 固定網址是小寫百分比編碼，回送時被 HTTP 函式庫改成大寫；仍要寫入，並由預載確認完成。
+        $GLOBALS['remote'] = [];
+        $chinese = '/%e6%89%8b%e5%b7%a5%e7%9a%82/';
+        Preload::enqueuePaths( [ '/%E6%89%8B%E5%B7%A5%E7%9A%82/' ] );
+        Preload::persist();
+        expect_same( [ $chinese ], array_keys( Preload::readState( $directory )['pending'] ), 'Queue the canonical path' );
+        Preload::run();
+        expect_same( 2, count( $GLOBALS['remote'] ), 'Render a Chinese page once per device' );
+        expect_same( true, $fresh( $chinese, 'd' ) && $fresh( $chinese, 'm' ), 'Store the Chinese page where visitors and preload look for it' );
+        expect_same( [ 0, '' ], [ Preload::status()['pending'], Preload::status()['last_error'] ], 'No "not cached" report for percent-encoded paths' );
         $GLOBALS['remote'] = [];
         $GLOBALS['uncacheable'] = [ '/product/soap/' ];
         Store::invalidatePath( $directory, '/product/soap/' );

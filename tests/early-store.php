@@ -65,6 +65,17 @@ try {
     expect_same( true, YSCacheEarlyStore::write( $directory, $host, $path, $snapshot, $headers, $html, 600, 'm' ), 'Write the phone variant' );
     expect_same( true, YSCacheEarlyStore::write( $directory, $host, $path, $snapshot, $headers, $html, 999999, 'd' ), 'Accept an over-long lifetime' );
     expect_same( true, YSCacheEarlyStore::read( $directory, $host, $path, 'd' )['expires'] - time() <= YSCacheEarlyStore::MAX_TTL, 'Clamp lifetimes to the 12-hour nonce window' );
+
+    // 標準路徑：百分比編碼的十六進位一律小寫；只差在大小寫的寫法共用同一份，其他字元不變。
+    expect_same( '/%e6%89%8b%e5%b7%a5%e7%9a%82/', YSCacheEarlyStore::canonicalPath( '/%E6%89%8B%E5%B7%A5%E7%9A%82/' ), 'Lowercase percent-encoded octets' );
+    expect_same( '/a%2db/x%3a/', YSCacheEarlyStore::canonicalPath( '/a%2Db/x%3A/' ), 'Never decode an octet, only lowercase it' );
+    expect_same( '/Soap/', YSCacheEarlyStore::canonicalPath( '/Soap/' ), 'Keep letters outside percent-encoding' );
+    $upper = '/%E6%89%8B%E5%B7%A5%E7%9A%82/';
+    $lower = '/%e6%89%8b%e5%b7%a5%e7%9a%82/';
+    expect_same( true, YSCacheEarlyStore::write( $directory, $host, $upper, YSCacheEarlyStore::snapshot( $directory, $upper ), $headers, $html, 600, 'd' ), 'Write from an uppercase-encoded request' );
+    expect_same( $html, stored_html( YSCacheEarlyStore::read( $directory, $host, $lower, 'd' ) ), 'Visitors following the lowercase WordPress link hit the same entry' );
+    expect_same( true, YSCacheEarlyStore::fresh( $directory, $host, $lower, 'd', 300 ), 'Preload finds the entry under the permalink path' );
+    expect_same( $html, stored_html( YSCacheEarlyStore::read( $directory, $host, '/%E6%89%8b%E5%B7%A5%E7%9A%82/', 'd' ) ), 'Mixed-case encoding reads the same entry' );
     expect_same( true, YSCacheEarlyStore::initialize( $directory ), 'Repeated initialization keeps existing generations' );
     expect_same( $snapshot, YSCacheEarlyStore::snapshot( $directory, $path ), 'Do not rotate the generation on initialization' );
 

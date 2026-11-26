@@ -141,6 +141,16 @@ expect_same( null, Request::writerPath( array_replace( $request, [ 'REQUEST_URI'
 expect_same( null, Request::writerPath( array_replace( $request, [ 'QUERY_STRING' => 'x=1' ] ), [], $config ), 'Never write when the server reports a query' );
 expect_same( null, Request::writerPath( $request, [ 'mysess' => '1' ], $config + [ 'session_name' => 'mysess', 'writer_cookies' => [ 'mysess' ] ] ), 'Never write from the configured session cookie' );
 
+// 百分比編碼的大小寫不影響網址（RFC 3986）：WordPress 的連結是小寫，WordPress 的 HTTP 函式庫、Google 與通訊軟體常送大寫。
+// 讀取與寫入都使用小寫的標準路徑，同一頁只存一份。
+$upperEncoded = '/product-category/%E6%89%8B%E5%B7%A5%E7%9A%82/';
+$lowerEncoded = '/product-category/%e6%89%8b%e5%b7%a5%e7%9a%82/';
+expect_same( [ 'path' => $lowerEncoded, 'variant' => 'd' ], $hit( array_replace( $request, [ 'REQUEST_URI' => $upperEncoded ] ) ), 'Serve uppercase percent-encoding from the canonical path' );
+expect_same( [ 'path' => $lowerEncoded, 'variant' => 'd' ], $hit( array_replace( $request, [ 'REQUEST_URI' => $lowerEncoded . '?fbclid=abc' ] ) ), 'The WordPress link keeps its path' );
+expect_same( $lowerEncoded, Request::writerPath( array_replace( $request, [ 'REQUEST_URI' => $upperEncoded ] ), [], $config )['path'] ?? null, 'Write uppercase percent-encoding under the canonical path' );
+expect_same( '/a%2db/', Request::evaluate( array_replace( $request, [ 'REQUEST_URI' => '/a%2Db/' ] ), [], $config )['path'] ?? null, 'Never decode an octet into another address' );
+expect_same( '/Soap/', Request::evaluate( array_replace( $request, [ 'REQUEST_URI' => '/Soap/' ] ), [], $config )['path'] ?? null, 'Letter case outside percent-encoding is kept' );
+
 // gzip 協商。
 expect_same( true, Request::acceptsGzip( 'gzip, deflate, br, zstd' ), 'Chrome accepts gzip' );
 expect_same( true, Request::acceptsGzip( 'br;q=1.0, gzip;q=0.8, *;q=0.1' ), 'Weighted gzip' );

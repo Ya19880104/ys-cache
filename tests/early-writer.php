@@ -570,6 +570,14 @@ namespace {
         expect_same( true, is_array( $stored( '/clean/', 'm' ) ), 'Store the phone variant' );
         expect_same( 'HIT', $header( $fetch( '/clean/', [ 'User-Agent: ' . FIXTURE_PHONE ] ), 'x-ys-cache' ), 'Serve the phone variant early' );
 
+        // 百分比編碼大小寫不同仍是同一頁：Google、通訊軟體與 WordPress 的 HTTP 函式庫常送大寫，WordPress 的連結是小寫。
+        $upperEncoded = '/%E6%89%8B%E5%B7%A5%E7%9A%82/';
+        $lowerEncoded = '/%e6%89%8b%e5%b7%a5%e7%9a%82/';
+        expect_same( 'MISS', $header( $fetch( $upperEncoded ), 'x-ys-cache' ), 'An uppercase-encoded request renders as a candidate' );
+        expect_same( true, is_array( $stored( $lowerEncoded ) ), 'Store it under the lowercase permalink path' );
+        expect_same( 'HIT', $header( $fetch( $lowerEncoded ), 'x-ys-cache' ), 'A visitor following the WordPress link hits the same entry' );
+        expect_same( 'HIT', $header( $fetch( $upperEncoded ), 'x-ys-cache' ), 'The uppercase address hits the same entry' );
+
         // 不乾淨的請求只讀不寫。
         $session = $fetch( '/session-visitor/', [ 'Cookie: PHPSESSID=abc; _ga=GA1.1.1' ] );
         $bypassed( $session, 'A PHP session request' );

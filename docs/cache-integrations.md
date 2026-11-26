@@ -130,7 +130,7 @@ Saving a product or post clears these pages:
 
 Changes that affect only one page clear that page, such as variations, product images, prices, thumbnails and approved comments. WooCommerce saves through the REST API or CSV import clear the product the same way. Inventory changes clear the product. When availability changes, they also clear the shop, the product's category and tag archives and the front page. Replacing, editing or deleting a media file also clears the products, posts and category archives that use it as a featured image, gallery image or category thumbnail.
 
-Clearing a URL also clears its `/page/N/` pagination, comment pages, post pages such as `/2/`, both device copies and any letter-case variants of the address. Addresses that differ from the real permalink only by letter case are never stored as separate copies. Local copies are cleared in the same request and preload renders them again. Server and CDN purges are still queued.
+Clearing a URL also clears its `/page/N/` pagination, comment pages, post pages such as `/2/`, both device copies and any letter-case variants of the address. Addresses that differ from the real permalink only by letter case are never stored as separate copies. Percent-encoded addresses, such as Chinese permalinks, match regardless of the case of their hex digits, so `/%E6%89%8B/` from a search result or messaging app and `/%e6%89%8b/` from a site link share one copy. Local copies are cleared in the same request and preload renders them again. Server and CDN purges are still queued.
 
 Unpublishing a page, making it private, changing its password or deleting it always clears its cached copy, even when automatic purging is off, because cached pages are sent before WordPress could check the post status.
 
@@ -352,7 +352,7 @@ YS CACHE 將每份快取限制在 `nonce_life` 的一半減五分鐘，預設為
 
 只影響單頁的變更只清除該頁，例如商品變體、商品圖片、價格、縮圖與已核准的留言。透過 REST API 或 CSV 匯入儲存的 WooCommerce 商品也一樣只清除該商品。庫存變更會清除該商品。可售狀態改變時，也會清除商店、商品所屬的分類與標籤彙整頁及首頁。替換、編輯或刪除媒體檔案時，也會清除把它當作精選圖片、商品圖庫或分類縮圖的商品、文章與分類彙整頁。
 
-清除一個網址時，也會一併清除它的 `/page/N/` 分頁、留言分頁、`/2/` 這類文章分頁、兩種裝置版本，以及網址的大小寫變體。只和正式網址大小寫不同的網址不會另存一份。本機快取在同一個請求中清除，並由預載重新產生。伺服器與 CDN 清除照常排入佇列。
+清除一個網址時，也會一併清除它的 `/page/N/` 分頁、留言分頁、`/2/` 這類文章分頁、兩種裝置版本，以及網址的大小寫變體。只和正式網址大小寫不同的網址不會另存一份。百分比編碼的網址（例如中文固定網址）不分十六進位大小寫，搜尋結果或通訊軟體送來的 `/%E6%89%8B/` 與網站連結的 `/%e6%89%8b/` 共用同一份。本機快取在同一個請求中清除，並由預載重新產生。伺服器與 CDN 清除照常排入佇列。
 
 頁面下架、設為私人、更改密碼或刪除時，即使關閉自動清除，也一定會清除它的快取，因為快取頁面是在 WordPress 檢查文章狀態之前送出的。
 

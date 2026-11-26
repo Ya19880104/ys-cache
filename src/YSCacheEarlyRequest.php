@@ -155,7 +155,8 @@ final class YSCacheEarlyRequest {
                 return 'agent';
             }
         }
-        return [ 'path' => $path ];
+        // %E6 與 %e6 是同一個網址：讀取端與寫入端都用標準路徑，同一頁只存一份。
+        return [ 'path' => YSCacheEarlyStore::canonicalPath( $path ) ];
     }
 
     /** 查詢字串只含追蹤參數時回傳 true；空查詢字串（`/?`）視為沒有參數。 */

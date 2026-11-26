@@ -46,6 +46,18 @@ final class YSCacheEarlyStore {
             && ! preg_match( '~(?:^|/)(?:wp-admin|wp-json|wp-includes|wp-content|feed|trackback)(?:/|$)|\.php(?:/|$)~i', rawurldecode( $path ) );
     }
 
+    /**
+     * 標準路徑：百分比編碼的十六進位一律小寫，與 WordPress 產生的固定網址相同。
+     *
+     * RFC 3986 視 %E6 與 %e6 為同一個網址，WordPress 也回應同一頁而不轉址。WordPress 的 HTTP 函式庫（預載的本機回送）、
+     * Google 與通訊軟體常送大寫；統一之後，讀取、寫入與預載都對應同一份快取。其他字元（包括英文字母的大小寫）不變。
+     */
+    public static function canonicalPath( string $path ): string {
+        return str_contains( $path, '%' )
+            ? (string) preg_replace_callback( '/%[0-9A-Fa-f]{2}/', static fn ( array $octet ): string => strtolower( $octet[0] ), $path )
+            : $path;
+    }
+
     /** 這個路徑可能有快取項目（能被清除）；不合格的路徑從來不會被寫入。 */
     public static function purgeablePath( string $path ): bool {
         return self::validPathForInvalidation( $path );
@@ -107,6 +119,7 @@ final class YSCacheEarlyStore {
         if ( $headers === null ) {
             return false;
         }
+        $path = self::canonicalPath( $path );
         $body = gzencode( $html, 6 );
         if ( ! is_string( $body ) || strlen( $body ) > self::MAX_STORED ) {
             return false;
@@ -166,6 +179,7 @@ final class YSCacheEarlyStore {
             return null;
         }
         $host = strtolower( $host );
+        $path = self::canonicalPath( $path );
         return self::readEntry( $directory, $host, $path, $variant, self::entryKey( $host, $path, $variant ) );
     }
 
