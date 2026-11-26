@@ -699,8 +699,14 @@ final class YSCachePreload {
         return self::normalize( $data, time() );
     }
 
-    public static function normalize( $data, int $now ): array {
+    /**
+     * 整理佇列檔。失敗次數與冷卻只屬於寫下它們的外掛版本：新版本可能已修正讓頁面無法快取的原因，
+     * 所以升級後清掉，這些頁面在下一次預載就重新嘗試；佇列本身保留。
+     */
+    public static function normalize( $data, int $now, ?string $version = null ): array {
         $data = is_array( $data ) ? $data : [];
+        $version ??= defined( 'YS_CACHE_VERSION' ) ? (string) YS_CACHE_VERSION : '';
+        $verdicts = ( $data['version'] ?? '' ) === $version;
         $state = [
             'pending'       => [],
             'attempts'      => [],
@@ -713,6 +719,7 @@ final class YSCachePreload {
             'last_error'    => is_string( $data['last_error'] ?? null ) ? self::message( $data['last_error'] ) : '',
             'total'         => self::number( $data['total'] ?? 0 ),
             'epoch'         => is_string( $data['epoch'] ?? null ) && preg_match( '~\A[a-f0-9]{32}\z~', $data['epoch'] ) ? $data['epoch'] : '',
+            'version'       => $version,
         ];
         foreach ( is_array( $data['pending'] ?? null ) ? $data['pending'] : [] as $path => $seq ) {
             if ( count( $state['pending'] ) >= self::MAX_PENDING ) {
@@ -721,6 +728,9 @@ final class YSCachePreload {
             if ( is_string( $path ) && is_int( $seq ) && $seq >= 0 && self::validPath( $path ) ) {
                 $state['pending'][ $path ] = $seq;
             }
+        }
+        if ( ! $verdicts ) {
+            return $state;
         }
         foreach ( is_array( $data['attempts'] ?? null ) ? $data['attempts'] : [] as $path => $counts ) {
             if ( is_string( $path ) && isset( $state['pending'][ $path ] ) && is_array( $counts ) ) {

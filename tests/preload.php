@@ -412,6 +412,14 @@ namespace {
         $state = Preload::normalize( [ 'pending' => [ '/x/' => 3 ], 'seq' => 3, 'full' => true,
             'cooldown' => [ '/cool/' => $now + 100, '/expired/' => $now - 1 ] ], $now );
         expect_same( [ '/cool/' => $now + 100 ], $state['cooldown'], 'Forget expired cooldowns' );
+        // 失敗次數與冷卻只屬於寫下它們的外掛版本：升級後清掉，新版本修正過的頁面馬上重新預載；佇列保留。
+        $previous = [ 'pending' => [ '/x/' => 3 ], 'attempts' => [ '/x/' => [ 1, 1 ] ], 'cooldown' => [ '/cool/' => $now + 100 ], 'version' => '0.2.0-beta.1' ];
+        $upgraded = Preload::normalize( $previous, $now, '0.2.0-beta.2' );
+        expect_same( [ [ '/x/' => 3 ], [], [] ], [ $upgraded['pending'], $upgraded['attempts'], $upgraded['cooldown'] ], 'Forget failure verdicts written by another plugin version' );
+        expect_same( '0.2.0-beta.2', $upgraded['version'], 'Stamp the state with the running version' );
+        $unchanged = Preload::normalize( $previous, $now, '0.2.0-beta.1' );
+        expect_same( [ [ '/x/' => [ 1, 1 ] ], [ '/cool/' => $now + 100 ] ], [ $unchanged['attempts'], $unchanged['cooldown'] ], 'Keep verdicts written by the running version' );
+        expect_same( [], Preload::normalize( array_diff_key( $previous, [ 'version' => true ] ), $now, '0.2.0-beta.2' )['cooldown'], 'A queue file from before versioning counts as another version' );
         $full = Preload::withFull( $state, [ '/', '/x/', '/cool/', '/y/', '/wp-admin/' ], $now, $epoch );
         expect_same( [ '/x/' => 3, '/' => 4, '/y/' => 4 ], $full['pending'], 'Append unqueued paths outside their cooldown' );
         expect_same( [ false, $now, 5, $epoch ], [ $full['full'], $full['last_full'], $full['total'], $full['epoch'] ], 'Record the full refresh' );
