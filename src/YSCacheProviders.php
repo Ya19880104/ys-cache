@@ -574,8 +574,23 @@ final class YSCacheProviders
                 return self::request($label, 'POST', $endpoint, $headers, ['paths' => []], 201, $provider);
             }
             $paths = array_values(array_unique(array_map([self::class, 'pathAndQuery'], $files)));
-            return self::purgeBatches($label, $paths, 100,
+            // Gcore 自 2026-11-25 起拒絕含 |、換行、Tab 或不完整 % 編碼的路徑，而且一個不合格就整批回 400；
+            // 這類路徑依瀏覽器原樣送出，改寫編碼會清到別的快取鍵，所以略過並在結果註明。
+            $accepted = array_values(array_filter($paths, [self::class, 'gcorePurgePath']));
+            $left_out = count($paths) - count($accepted);
+            $note = $left_out > 0
+                ? sprintf(_n('Gcore does not accept %d path because it contains |, a line break, a tab or an incomplete percent escape, so it was left out.',
+                    'Gcore does not accept %d paths because they contain |, a line break, a tab or an incomplete percent escape, so they were left out.', $left_out, 'ys-cache'), $left_out)
+                : '';
+            if ($accepted === []) {
+                return self::result($label, 'skipped', $note);
+            }
+            $result = self::purgeBatches($label, $accepted, 100,
                 static fn (array $batch): array => self::request($label, 'POST', $endpoint, $headers, ['urls' => $batch], 201, $provider));
+            if ($note !== '' && $result['status'] === 'ok') {
+                $result['message'] .= ' ' . $note;
+            }
+            return $result;
         }
 
         $headers = ['AccessKey' => $token];
@@ -701,15 +716,12 @@ final class YSCacheProviders
                 return self::result($label, 'error', __('Cloudflare did not accept the purge.', 'ys-cache'), $status);
             }
         } elseif ($provider === 'gcore') {
+            // Gcore 的 API 規格只把 201 定為成功、沒有定義回應內容（官方 SDK 也不讀）；操作指南說會回傳送出的路徑。
+            // 有回傳清單時才核對（不分順序與百分比編碼大小寫），沒有清單的 201 視為已受理。
             $body = json_decode(wp_remote_retrieve_body($response), true);
             $key = array_key_first($payload ?? []);
-            $reported = $body[$key] ?? null;
-            $submitted = $payload[$key] ?? [];
-            if (is_array($reported)) {
-                sort($reported);
-                sort($submitted);
-            }
-            if ($reported !== $submitted) {
+            $reported = is_array($body) ? ($body[$key] ?? null) : null;
+            if (is_array($reported) && !self::sameGcorePaths($reported, (array) ($payload[$key] ?? []))) {
                 return self::result($label, 'error', __('Gcore did not confirm every requested purge path.', 'ys-cache'), $status);
             }
         }
@@ -763,6 +775,23 @@ final class YSCacheProviders
             }
         }
         return array_values(array_unique($files));
+    }
+
+    /** Gcore 接受的清除路徑：以 / 開頭，不含 |、控制字元，每個 % 後面都是兩位十六進位數字。 */
+    private static function gcorePurgePath(string $path): bool
+    {
+        return str_starts_with($path, '/') && !preg_match('/[|\x00-\x1f\x7f]|%(?![0-9A-Fa-f]{2})/', $path);
+    }
+
+    /** Gcore 回傳的路徑清單是否與送出的相同：不分順序，百分比編碼大小寫視為相同。 */
+    private static function sameGcorePaths(array $reported, array $submitted): bool
+    {
+        $canonical = static function (array $paths): array {
+            $paths = array_map(static fn ($path): string => is_string($path) ? YSCacheEarlyStore::canonicalPath($path) : "\0", $paths);
+            sort($paths);
+            return $paths;
+        };
+        return $canonical($reported) === $canonical($submitted);
     }
 
     private static function pathAndQuery(string $url): string

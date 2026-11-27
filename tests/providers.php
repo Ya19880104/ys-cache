@@ -36,6 +36,7 @@ if ($core !== '') {
 }
 
 function __($value, $domain) { return $value; }
+function _n($single, $plural, $number, $domain) { return $number === 1 ? $single : $plural; }
 function wp_kses_uri_attributes() { return ['href','src']; }
 function esc_attr($text) { return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function esc_url($text) { return esc_attr($text); }
@@ -90,6 +91,7 @@ final class FakeNginxPurge {
 }
 class_alias(FakeNginxPurge::class, 'YangSheep\Cache\YSCacheNginx');
 
+require dirname(__DIR__) . '/src/YSCacheEarlyStore.php';
 require dirname(__DIR__) . '/src/YSCacheProviders.php';
 use YangSheep\Cache\YSCacheProviders as Providers;
 
@@ -427,6 +429,24 @@ $GLOBALS['gcore_reply'] = '{"urls":["/shop/item/"]}';
 check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/', '/shop/another/'])[0]['status'], 'error', 'An accepted Gcore request must echo every submitted path');
 unset($GLOBALS['gcore_reply']);
 check(json_decode($GLOBALS['http'][1][1]['body'], true), ['urls' => ['/shop/item/']], 'Gcore sends each cache path only once per resource');
+// Gcore 的 API 規格只把 201 定為成功、沒有定義回應內容（官方 SDK 也不讀）：沒有回傳清單的 201 算已受理。
+$GLOBALS['gcore_reply'] = '';
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/'])[0]['status'], 'ok', 'A Gcore 201 without a response body is accepted');
+check(Providers::purge($gcoreAliases, 'all')[0]['status'] ?? null, 'ok', 'A Gcore purge-all 201 without a response body is accepted');
+// 回傳清單時才核對，不分順序與百分比編碼大小寫（Gcore 可能把 %e6 寫成 %E6）。
+$GLOBALS['gcore_reply'] = '{"urls":["/%E6%89%8B/","/shop/item/"]}';
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/', '/%e6%89%8b/'])[0]['status'], 'ok', 'Gcore echoes match regardless of order and percent-encoding case');
+unset($GLOBALS['gcore_reply']);
+// 自 2026-11-25 起，路徑含 |、換行、Tab 或不完整的 % 編碼時 Gcore 整批回 400：只送出合格路徑，並註明略過幾個。
+$GLOBALS['http'] = [];
+$mixed = Providers::purge($gcoreAliases, 'urls', ['/shop/item/', '/shop/?filter=red|blue', '/sale-100%-off/']);
+check($mixed[0]['status'], 'ok', 'Valid paths are still purged when Gcore would reject others');
+check(json_decode(end($GLOBALS['http'])[1]['body'], true), ['urls' => ['/shop/item/']], 'Only paths Gcore accepts are submitted');
+check(str_contains($mixed[0]['message'], '2 paths') && str_contains($mixed[0]['message'], 'left out'), true, 'Report how many paths were left out');
+$GLOBALS['http'] = [];
+$rejected = Providers::purge($gcoreAliases, 'urls', ['/shop/?filter=red|blue']);
+check($rejected[0]['status'], 'skipped', 'A purge made only of rejected paths is skipped, so outer layers still run');
+check(array_values(array_filter(array_column($GLOBALS['http'], 0), static fn (string $url): bool => str_ends_with($url, '/purge'))), [], 'Nothing is sent to Gcore when every path would be rejected');
 unset($GLOBALS['resource_reply']);
 
 $form = $settings;

@@ -868,6 +868,11 @@ msgstr "CDN 清除在完成 %1$d／%2$d 個請求後停止。%3$s"
 msgid "Gcore did not confirm every requested purge path."
 msgstr "Gcore 未確認所有要求清除的路徑。"
 
+#, php-format
+msgid "Gcore does not accept %d path because it contains |, a line break, a tab or an incomplete percent escape, so it was left out."
+msgid_plural "Gcore does not accept %d paths because they contain |, a line break, a tab or an incomplete percent escape, so they were left out."
+msgstr[0] "Gcore 不接受 %d 個路徑（含有 |、換行、Tab 或不完整的百分比編碼），已略過這些路徑。"
+
 msgid "Exclusion guide"
 msgstr "排除規則指南"
 

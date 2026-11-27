@@ -51,6 +51,9 @@ Under **CDN Layers → Website alias hostnames**, enter the alternate domains th
 
 1. Sign in to the Gcore Customer Portal. Open the avatar menu and select **Profile → API tokens → Create token**. Set a name and expiry, grant the CDN permissions needed to read resources and purge cache, and copy the token while it is displayed.
 2. In WordPress, select **Gcore**, enter a hostname already attached to the CDN resource, and paste the token into **API token / key**. Use **Find resource ID** to find the matching resource, then enable API purging and save. [Gcore API tokens](https://docs.gcore.com/account-settings/api-tokens)
+3. Tokens created since 2026 look like `12345_abc…`; older tokens with `$` keep working. Both are accepted.
+
+Gcore rejects a whole purge request when any path contains `|`, a line break, a tab, or a `%` that is not followed by two hexadecimal digits. YS CACHE leaves those paths out, purges the rest, and names the count in the purge result. Gcore accepts two URL purges per resource per minute, with up to 100 URLs each. A `201` reply counts as accepted; when Gcore lists the paths it received, YS CACHE checks the list without regard to order or percent-encoding case.
 
 ## Path rules and shorter lifetimes
 
@@ -273,6 +276,9 @@ OPcache 清除會重設處理該 WordPress 請求的 PHP 記憶體快取。需 P
 
 1. 登入 Gcore Customer Portal，從頭像選單開啟 **Profile → API tokens → Create token**。設定名稱和效期，授予讀取 CDN 資源與清除快取所需權限，並在畫面顯示時複製 Token。
 2. 回到 WordPress 的「CDN 層」，選擇 **Gcore**，填入已綁定 CDN 資源的主機名稱及 Token。按「查詢資源 ID」配對資源，再啟用 API 清除並儲存。 [Gcore API Token](https://docs.gcore.com/account-settings/api-tokens)
+3. 2026 年起建立的 Token 形如 `12345_abc…`，含 `$` 的舊 Token 仍可使用，兩種都能填。
+
+只要有一個路徑含 `|`、換行、Tab，或 `%` 後面不是兩位十六進位數字，Gcore 就會拒絕整個清除請求。YS CACHE 會略過這些路徑、清除其餘路徑，並在清除結果註明略過幾個。Gcore 每個資源每分鐘接受兩次網址清除，每次最多 100 個網址。回應 `201` 即視為已受理；Gcore 回傳收到的路徑清單時，YS CACHE 會核對清單，不分順序與百分比編碼大小寫。
 
 ### 路徑規則與縮短快取效期
 
