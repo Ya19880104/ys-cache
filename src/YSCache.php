@@ -568,6 +568,9 @@ final class YSCache {
         if ( ( ! self::usesLocalHtml( $settings ) && ! self::delegatesHtml( $settings ) && ! $this->edgeHtml && ! $this->liteSpeedHtml ) || headers_sent() ) {
             return;
         }
+        if ( $this->earlySnapshot !== null ) {
+            self::dropSessionLimiter();
+        }
         if ( self::delegatesHtml( $settings ) && ! in_array( 'X-Accel-Expires: 0', headers_list(), true ) ) {
             $this->externalHold = false;
             header( 'X-Accel-Expires: 0', true );
@@ -589,6 +592,24 @@ final class YSCache {
             header( $control, true );
         }
         header( 'X-YS-Cache: BYPASS', true );
+    }
+
+    /**
+     * 先快取：PHP 的 session_start() 預設（session.cache_limiter=nocache）會送出固定的禁止快取標頭，
+     * 這是開 session 的副作用，不代表外掛要求不快取。只有三個標頭原封不動時才移除；
+     * 外掛改過任何一個（例如呼叫 nocache_headers()），就照常視為私人回應。
+     */
+    private static function dropSessionLimiter(): void {
+        $headers = headers_list();
+        $control = array_intersect( [ 'Cache-Control: no-store, no-cache, must-revalidate',
+            'Cache-Control: no-store, no-cache, must-revalidate, post-check=0, pre-check=0' ], $headers );
+        if ( ! in_array( 'Expires: Thu, 19 Nov 1981 08:52:00 GMT', $headers, true ) || ! in_array( 'Pragma: no-cache', $headers, true ) || $control === []
+            || count( array_filter( $headers, static fn ( string $header ): bool => preg_match( '~^(?:Expires|Pragma|Cache-Control):~i', $header ) === 1 ) ) !== 3 ) {
+            return;
+        }
+        foreach ( [ 'Expires', 'Cache-Control', 'Pragma' ] as $name ) {
+            header_remove( $name );
+        }
     }
 
     private function excludeLiteSpeedResponse(): void {

@@ -337,6 +337,18 @@ namespace {
         if ( $path === '/plugin-private/' ) {
             header( 'Cache-Control: no-cache, must-revalidate' );
         }
+        if ( $path === '/session-limiter/' ) {
+            // PHP 的 session_start()（session.cache_limiter=nocache）在 wp 階段送出的固定標頭。
+            header( 'Set-Cookie: PHPSESSID=fixture-session-limiter; path=/', false );
+            header( 'Expires: Thu, 19 Nov 1981 08:52:00 GMT' );
+            header( 'Cache-Control: no-store, no-cache, must-revalidate' );
+            header( 'Pragma: no-cache' );
+        }
+        if ( $path === '/wordpress-nocache/' ) {
+            // WordPress nocache_headers()：外掛明確要求不快取。
+            header( 'Expires: Wed, 11 Jan 1984 05:00:00 GMT' );
+            header( 'Cache-Control: no-cache, must-revalidate, max-age=0, no-store, private' );
+        }
         if ( $path === '/recently-viewed/' ) {
             // WooCommerce 在 template_redirect 記錄瀏覽紀錄。
             header( 'Set-Cookie: woocommerce_recently_viewed=12%7C13; path=/; secure; HttpOnly', false );
@@ -682,6 +694,15 @@ namespace {
             expect_same( true, is_array( $stored( $path ) ), $label . ' is cached' );
             expect_same( 'HIT', $header( $fetch( $path ), 'x-ys-cache' ), $label . ' is served early' );
         }
+        // session_start() 自動送出的禁止快取標頭只是 session 的副作用，不是外掛要求不快取。
+        $limiter = $fetch( '/session-limiter/' );
+        expect_same( 'MISS', $header( $limiter, 'x-ys-cache' ), 'PHP session cache limiter headers do not make the page private' );
+        expect_same( '', $header( $limiter, 'pragma' ) . $header( $limiter, 'expires' ), 'The limiter headers are dropped from the candidate response' );
+        expect_same( true, is_array( $stored( '/session-limiter/' ) ), 'A page with a PHP session started before rendering is cached' );
+        $limiterHit = $fetch( '/session-limiter/' );
+        expect_same( [ 'HIT', '' ], [ $header( $limiterHit, 'x-ys-cache' ), $header( $limiterHit, 'set-cookie' ) ], 'Later visitors get the page without the session cookie' );
+        $bypassed( $fetch( '/wordpress-nocache/' ), 'A plugin calling nocache_headers()' );
+        expect_same( null, $stored( '/wordpress-nocache/' ), 'WordPress nocache headers still prevent the write' );
         foreach ( [
             '/reflected-cookie/' => 'A page that prints the new cookie value',
             '/state-cookie/' => 'A render that fills the cart',
