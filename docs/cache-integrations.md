@@ -99,7 +99,9 @@ Requests with `Authorization`, `X-WP-Nonce`, an AJAX `X-Requested-With: XMLHttpR
 
 YS CACHE stores a page only from a clean WordPress render or a preload request. The request is a `GET` without a query string on the site's HTTPS hostname, from a visitor who is not logged in. It has no deny-listed cookie and no PHP session cookie. Its other cookies are analytics cookies only: `_ga`, `_gid`, `_gat`, `_gcl_`, `_fbp`, `_fbc`, `_ttp`, `_clck`, `_clsk`, `_uet`, `_pin_`, `sbjs_`, PixelYourSite cookies such as `pys_` and `pbid`, and names added with the `ys_cache_writer_cookie_prefixes` filter.
 
-The response must be a complete `200` HTML page with an empty cart, no WooCommerce notice, no cookie other than an ignorable one, and no private or `no-store` cache header from another plugin. Searches, 404 pages, feeds, previews, password-protected content, cart, checkout and account pages, WooCommerce coming soon pages, and pages with per-visitor forms or tokens are not stored. Every visitor can read the shared copy, but no visitor's state is written into it.
+The early cache caches first and excludes second. The response must be a complete `200` HTML page with an empty cart, no WooCommerce notice, and no private or `no-store` cache header from another plugin. Forms, login popups and WordPress guest nonces are cached like any other markup: a guest nonce is the same for every visitor, and each copy expires within half the nonce lifetime. Cookies set while rendering, such as a PHP session or an empty WooCommerce or YS CART session, go only to the visitor who triggered the render; the shared copy never carries a cookie.
+
+A render is not stored when it carries one visitor's state: a cookie for a login, a cart with items, a currency, a language or a wishlist, a name listed in **Cookie exclusions** or added with the `ys_cache_personal_response_cookies` filter, or any new cookie whose value is printed in the page. A WooCommerce session created during the render also blocks the write when the page contains a `woocommerce-…-nonce` field, because WooCommerce ties those nonces to the session. YS CART guest tokens and PixelYourSite customer data block the write too. Searches, 404 pages, feeds, previews, password-protected content, and cart, checkout and account pages are never stored. Every visitor can read the shared copy, but no visitor's state is written into it.
 
 Copies stay outside the web root, compressed with gzip. Each hit checks the copy's integrity hash and replays the compatible security headers of the original response.
 
@@ -190,7 +192,7 @@ YS CACHE caches pages with PixelYourSite output like any other page, as WP Rocke
 
 ## Forms and lifetime
 
-YS CACHE checks the current page’s shortcodes and blocks and inspects the rendered output. A form in a shared footer or builder template can affect every page where it appears. WPForms, Fluent Forms, and JetFormBuilder default to bypass because rendered forms can include expiring tokens, session data, dynamic fields, and payment or validation state. Contact Form 7 normally bypasses too. [WPForms cache and form tokens](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms payments and caching](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
+With the early cache, pages with WPForms, Fluent Forms, JetFormBuilder or Contact Form 7 forms are cached like other pages. Their guest nonces and WPForms' time-based token stay valid for longer than a cached copy lives. If a form depends on server-side session state, such as a CAPTCHA answer kept in a PHP session, add its page to **Exclusions**. Without the early cache, the local page cache still checks the current page’s shortcodes and blocks and the rendered output: WPForms, Fluent Forms, and JetFormBuilder bypass by default because rendered forms can include expiring tokens, session data, dynamic fields, and payment or validation state, and Contact Form 7 normally bypasses too. [WPForms cache and form tokens](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms payments and caching](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
 
 ### Simple public form pages (Beta)
 
@@ -324,7 +326,9 @@ YS CACHE 會為每個頁面分別儲存桌機與手機版本，判斷方式與 W
 
 YS CACHE 只用乾淨的 WordPress 渲染結果或預載請求寫入快取。請求須為網站 HTTPS 主機名稱上不含查詢字串的 `GET`，訪客未登入，沒有排除清單中的 Cookie，也沒有 PHP session Cookie。其他 Cookie 只能是分析 Cookie：`_ga`、`_gid`、`_gat`、`_gcl_`、`_fbp`、`_fbc`、`_ttp`、`_clck`、`_clsk`、`_uet`、`_pin_`、`sbjs_`、`pys_` 與 `pbid` 等 PixelYourSite Cookie，以及透過 `ys_cache_writer_cookie_prefixes` 篩選器加入的名稱。
 
-回應須為完整的 `200` HTML 頁面：購物車為空、沒有 WooCommerce 通知、除可忽略的 Cookie 外不設定 Cookie，且其他外掛沒有送出 private 或 `no-store` 快取標頭。搜尋、404、Feed、預覽、密碼保護內容、購物車、結帳、帳戶、WooCommerce 即將推出頁面，以及含逐位訪客表單或權杖的頁面都不會寫入。每位訪客都能讀取共用快取，但任何訪客的狀態都不會寫進去。
+提前快取採「先快取、再排除」。回應須為完整的 `200` HTML 頁面：購物車為空、沒有 WooCommerce 通知，且其他外掛沒有送出 private 或 `no-store` 快取標頭。表單、登入視窗與 WordPress 訪客 nonce 都和其他內容一樣快取：未登入訪客的 nonce 人人相同，而每份快取在 nonce 有效期的一半內就會到期。渲染時設定的 Cookie（例如 PHP session，或購物車是空的 WooCommerce、YS CART 工作階段）只會給觸發渲染的訪客，共用快取永遠不帶 Cookie。
+
+渲染帶有某位訪客的狀態時不會寫入：登入、購物車內有商品、幣別、語言或願望清單的 Cookie，「Cookie 排除」列出或透過 `ys_cache_personal_response_cookies` 篩選器加入的名稱，或任何新 Cookie 的值被印在頁面上。渲染時建立的 WooCommerce 工作階段，若頁面含 `woocommerce-…-nonce` 欄位也不會寫入，因為 WooCommerce 會把這類 nonce 綁定到該工作階段。YS CART 訪客權杖與 PixelYourSite 的顧客資料同樣不會寫入。搜尋、404、Feed、預覽、密碼保護內容、購物車、結帳和帳戶頁面一律不寫入。每位訪客都能讀取共用快取，但任何訪客的狀態都不會寫進去。
 
 快取存放在網站目錄外並以 gzip 壓縮。每次命中都會檢查完整性雜湊，並重播原始回應中相容的安全標頭。
 
@@ -415,7 +419,7 @@ YS CACHE 和 WP Rocket 一樣，把含 PixelYourSite 輸出的頁面當成一般
 
 ### 表單和快取效期
 
-YS CACHE 會檢查當前頁面的短代碼、區塊及實際輸出。共用頁尾或版型含表單時，可能影響每個顯示表單的頁面。WPForms、Fluent Forms 和 JetFormBuilder 預設繞過快取，因為表單可能含會到期的權杖、工作階段資料、動態欄位或付款及驗證狀態。Contact Form 7 預設也會繞過。 [WPForms 快取與表單權杖](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms 付款及快取](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
+使用提前快取時，含 WPForms、Fluent Forms、JetFormBuilder 或 Contact Form 7 表單的頁面和其他頁面一樣快取。訪客 nonce 與 WPForms 依時間產生的權杖，有效期都比一份快取的壽命長。表單若依賴伺服器端的工作階段狀態（例如答案存在 PHP session 的驗證碼），請把該頁加入「排除」。未使用提前快取時，本機頁面快取仍會檢查當前頁面的短代碼、區塊及實際輸出：WPForms、Fluent Forms 和 JetFormBuilder 預設繞過快取，因為表單可能含會到期的權杖、工作階段資料、動態欄位或付款及驗證狀態；Contact Form 7 預設也會繞過。 [WPForms 快取與表單權杖](https://wpforms.com/docs/how-to-optimize-cache-settings-to-fix-submission-errors/) · [Fluent Forms 付款及快取](https://fluentforms.com/why-fluent-forms-payments-break-with-caching-plugins-and-solutions/)
 
 #### 簡單公開表單頁面（Beta）
 

@@ -64,7 +64,13 @@ final class YSCacheIntegrations {
 			&& class_exists( '\YangSheep\TPAddons\Support\YSTPAddonsModules' );
 	}
 
-	public static function bypass( bool $localContactForm = false, bool $fragments = false ): bool {
+	/**
+	 * 這次請求不能共用快取。
+	 *
+	 * @param bool $cacheFirst 提前快取寫入端（先快取）：頁面上的表單不再讓整頁略過；
+	 *                         這次渲染才建立的 WooCommerce 工作階段改在輸出時判斷（購物車是空的就照常共用）。
+	 */
+	public static function bypass( bool $localContactForm = false, bool $fragments = false, bool $cacheFirst = false ): bool {
 		// YS CART localizes this header's value into storefront scripts during an HTML render.
 		if ( ! empty( $_SERVER['HTTP_X_YS_GUEST_TOKEN'] )
 			|| ! empty( $_SERVER['HTTP_X_WP_NONCE'] ) || ! empty( $_SERVER['HTTP_CART_TOKEN'] ) ) {
@@ -82,13 +88,13 @@ final class YSCacheIntegrations {
 				return true;
 			}
 			$session = WC()->session;
-			if ( is_object( $session ) && is_callable( [ $session, 'has_session' ] ) && $session->has_session() ) {
+			if ( ! $cacheFirst && is_object( $session ) && is_callable( [ $session, 'has_session' ] ) && $session->has_session() ) {
 				return true;
 			}
 		}
 
 		$post = get_queried_object();
-		if ( $post instanceof \WP_Post && self::formContentRequiresBypass( $post->post_content, $localContactForm, $fragments ) ) {
+		if ( ! $cacheFirst && $post instanceof \WP_Post && self::formContentRequiresBypass( $post->post_content, $localContactForm, $fragments ) ) {
 			return true;
 		}
 
@@ -589,6 +595,82 @@ final class YSCacheIntegrations {
 			}
 		}
 		return $kept;
+	}
+
+	/**
+	 * 先快取的回應標頭規則（提前快取寫入端）。
+	 *
+	 * Set-Cookie 一律不存入共用副本：觸發渲染的訪客照常收到，之後的訪客拿到的副本不帶任何 cookie。
+	 * 只有代表這次渲染已經個人化的 cookie 才讓回應不寫入：
+	 * - 名稱符合 $state 前綴（登入、購物車內容、幣別、語言、願望清單或設定的 cookie 排除），刪除 cookie 的標頭除外；
+	 * - cookie 的值（12 個字元以上）出現在 HTML 裡，表示頁面帶著這位訪客的識別碼。
+	 *
+	 * @param array    $headers 回應標頭（headers_list() 格式）。
+	 * @param string   $html    這次渲染的完整 HTML。
+	 * @param string[] $state   代表已個人化的 cookie 名稱前綴。
+	 * @return array|null 可共用的標頭（已移除 Set-Cookie）；不可共用時回傳 null。
+	 */
+	public static function shareableResponseHeaders( array $headers, string $html, array $state, ?int $now = null ): ?array {
+		$now ??= time();
+		$kept = [];
+		foreach ( $headers as $header ) {
+			if ( ! is_string( $header ) ) {
+				return null;
+			}
+			if ( ! preg_match( '~\ASet-Cookie\s*:(.*)\z~is', $header, $cookie ) ) {
+				$kept[] = $header;
+				continue;
+			}
+			$attributes = explode( ';', $cookie[1] );
+			$pair = explode( '=', (string) array_shift( $attributes ), 2 );
+			$name = trim( $pair[0] );
+			if ( count( $pair ) !== 2 || $name === '' ) {
+				return null;
+			}
+			if ( self::deletesCookie( $attributes, $now ) ) {
+				continue;
+			}
+			foreach ( $state as $prefix ) {
+				if ( is_string( $prefix ) && $prefix !== '' && str_starts_with( $name, $prefix ) ) {
+					return null;
+				}
+			}
+			$value = trim( trim( $pair[1] ), '"' );
+			foreach ( array_unique( [ $value, rawurldecode( $value ) ] ) as $candidate ) {
+				if ( strlen( $candidate ) >= 12 && str_contains( $html, $candidate ) ) {
+					return null;
+				}
+			}
+		}
+		return $kept;
+	}
+
+	/** Set-Cookie 的屬性表示刪除 cookie：Max-Age 小於等於 0，或沒有 Max-Age 且 Expires 已過。 */
+	private static function deletesCookie( array $attributes, int $now ): bool {
+		$maxAge = null;
+		$expires = null;
+		foreach ( $attributes as $attribute ) {
+			[ $key, $value ] = array_pad( explode( '=', $attribute, 2 ), 2, '' );
+			$key = strtolower( trim( $key ) );
+			if ( $key === 'max-age' ) {
+				$maxAge = trim( $value );
+			} elseif ( $key === 'expires' ) {
+				$expires = trim( $value );
+			}
+		}
+		return $maxAge !== null
+			? preg_match( '~\A-?[0-9]{1,12}\z~', $maxAge ) === 1 && (int) $maxAge <= 0
+			: $expires !== null && ( $time = strtotime( $expires ) ) !== false && $time < $now;
+	}
+
+	/**
+	 * 先快取的 HTML 規則（提前快取寫入端）：只有頁面帶著某位訪客的資料時才不共用。
+	 *
+	 * 表單、登入視窗與 WordPress 訪客 nonce 都照常快取：未登入訪客的 nonce 人人相同，
+	 * 而提前快取的壽命上限是 nonce 有效期的一半，送出時仍然有效。WPForms 的防垃圾權杖依時間產生，也是共用的。
+	 */
+	public static function shareableHtml( string $html ): bool {
+		return ! self::pixelYourSiteVisitorData( $html ) && preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) !== 1;
 	}
 
 	public static function cacheableHtml( string $html, bool $localContactForm = false ): bool {

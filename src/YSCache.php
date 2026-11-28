@@ -928,7 +928,7 @@ final class YSCache {
         // 公開表單頁需要每位訪客各自的表單權杖，不放進早期快取。
         if ( self::match( $excluded, $path, 'path' ) || self::match( $excluded, $decoded, 'path' ) ||
             ( $forms !== '' && ( self::match( $forms, $path, 'path' ) || self::match( $forms, $decoded, 'path' ) ) ) ||
-            YSCacheIntegrations::bypass() || ! apply_filters( 'ys_cache_allow_request', true, $path ) || self::comingSoon() ||
+            YSCacheIntegrations::bypass( false, false, true ) || ! apply_filters( 'ys_cache_allow_request', true, $path ) || self::comingSoon() ||
             self::variesByLocation() ) {
             return false;
         }
@@ -1005,7 +1005,7 @@ final class YSCache {
             }
             $responseHtml = $this->rewriteAssets( $html, $settings['providers'] );
             $status = http_response_code();
-            $headers = $complete && ! headers_sent() ? $this->earlyHeaders( $baseline ) : null;
+            $headers = $complete && ! headers_sent() ? $this->earlyHeaders( $baseline, $responseHtml, $settings ) : null;
             if ( $headers === null || ( $status !== false && $status !== 200 ) || ( defined( 'DONOTCACHEPAGE' ) && DONOTCACHEPAGE ) ||
                 ! $this->earlyHtmlAllowed( $html ) ) {
                 $this->abandonEarly();
@@ -1021,8 +1021,9 @@ final class YSCache {
         } );
     }
 
+    /** 先快取：完整的 HTML 只要沒有某位訪客的資料就共用（表單與訪客 nonce 照常快取）。 */
     private function earlyHtmlAllowed( string $html ): bool {
-        return self::isCompleteHtml( $html ) && YSCacheIntegrations::cacheableHtml( $html ) &&
+        return self::isCompleteHtml( $html ) && YSCacheIntegrations::shareableHtml( $html ) &&
             ! self::trackingSuppressed( $html ) && apply_filters( 'ys_cache_allow_html', true, $html );
     }
 
@@ -1043,18 +1044,58 @@ final class YSCache {
         return false;
     }
 
-    /** 去掉可略過的 Set-Cookie 後，回應標頭必須與開始擷取時完全相同；其他 Set-Cookie 一律不寫入。 */
-    private function earlyHeaders( array $baseline ): ?array {
-        $names = self::ignorableResponseCookies();
-        $before = YSCacheIntegrations::withoutIgnorableCookies( $baseline, $names );
-        $after = YSCacheIntegrations::withoutIgnorableCookies( $this->htmlResponseHeaders(), $names );
+    /**
+     * 先快取：回應 cookie 不存入共用副本（觸發渲染的訪客照常收到），其餘標頭必須與開始擷取時相同。
+     * 只有代表這次渲染已個人化的 cookie（earlyStateCookies()），或值印在頁面上的 cookie，才讓回應不寫入。
+     */
+    private function earlyHeaders( array $baseline, string $html, array $settings ): ?array {
+        $state = self::earlyStateCookies( $settings, $html );
+        $before = YSCacheIntegrations::shareableResponseHeaders( $baseline, $html, $state );
+        $after = YSCacheIntegrations::shareableResponseHeaders( $this->htmlResponseHeaders(), $html, $state );
         return $before !== null && $before === $after ? $after : null;
     }
 
-    /** 可略過的回應 cookie 名稱；其他外掛可用 ys_cache_ignorable_response_cookies 篩選器加入。 */
-    private static function ignorableResponseCookies(): array {
-        $names = (array) apply_filters( 'ys_cache_ignorable_response_cookies', YSCacheIntegrations::IGNORABLE_RESPONSE_COOKIES );
-        return array_values( array_filter( $names, static fn ( $name ): bool => is_string( $name ) && $name !== '' ) );
+    /**
+     * 代表這次渲染已經個人化的回應 cookie 名稱前綴：讀取端的排除清單（登入、幣別、語言、願望清單、設定的 cookie 排除）
+     * 加上購物車內容。渲染時才建立的 WooCommerce／YS CART 工作階段，購物車是空的就不算，頁面與一般訪客相同；
+     * WooCommerce 會把新工作階段帶進 woocommerce-* nonce，頁面上有這類欄位時仍算個人化。
+     * 其他外掛可用 ys_cache_personal_response_cookies 篩選器加入名稱。
+     */
+    private static function earlyStateCookies( array $settings, string $html ): array {
+        $state = array_diff( YSCacheEarly::config( $settings )['deny_cookies'], [ 'ys_ec_session', 'wp_woocommerce_session_' ] );
+        array_push( $state, 'woocommerce_items_in_cart', 'woocommerce_cart_hash' );
+        if ( ! self::emptyWooSession( $html ) ) {
+            $state[] = 'wp_woocommerce_session_';
+        }
+        if ( ! self::emptyYsCartSession() ) {
+            $state[] = 'ys_ec_session';
+        }
+        $state = (array) apply_filters( 'ys_cache_personal_response_cookies', array_values( $state ) );
+        return array_values( array_unique( array_filter( $state, static fn ( $name ): bool => is_string( $name ) && $name !== '' ) ) );
+    }
+
+    /** 這次渲染的 WooCommerce 工作階段可以共用：購物車是空的，頁面上也沒有綁定工作階段的 woocommerce-* nonce。 */
+    private static function emptyWooSession( string $html ): bool {
+        if ( ! function_exists( 'WC' ) ) {
+            return true;
+        }
+        $cart = WC()->cart ?? null;
+        return is_object( $cart ) && is_callable( [ $cart, 'is_empty' ] ) && $cart->is_empty()
+            && preg_match( '~\bname\s*=\s*["\']?woocommerce-[a-z0-9_-]*nonce~i', $html ) !== 1;
+    }
+
+    /** 這次渲染的 YS CART 訪客身分可以共用：購物車沒有商品（以 YS CART 不會建立新身分的唯讀查詢判斷）。 */
+    private static function emptyYsCartSession(): bool {
+        $class = 'YangSheep\Ecommerce\Handlers\YSCartHandler';
+        if ( ! class_exists( $class ) ) {
+            return true;
+        }
+        try {
+            $handler = $class::get_instance();
+            return is_object( $handler ) && is_callable( [ $handler, 'peek_cart_count' ] ) && (int) $handler->peek_cart_count() === 0;
+        } catch ( \Throwable $failure ) {
+            return false;
+        }
     }
 
     /** 這次回應不會寫入早期快取。 */
@@ -1081,7 +1122,8 @@ final class YSCache {
         $hold = array_search( $this->originCacheControl, $headers, true );
         if ( $hold !== false ) {
             unset( $headers[ $hold ] );
-            $headers = YSCacheIntegrations::withoutIgnorableCookies( array_values( $headers ), self::ignorableResponseCookies() );
+            // 共用副本永遠不帶 cookie（earlyHeaders() 已移除，這裡再保險一次）。
+            $headers = array_values( array_filter( $headers, static fn ( string $header ): bool => stripos( $header, 'Set-Cookie:' ) !== 0 ) );
         }
         $path = $this->earlyRequest['path'];
         $ttl = YSCacheEarly::ttl( $settings, $path );
@@ -1243,7 +1285,7 @@ final class YSCache {
             // 寫入翻譯完成的 HTML；標頭與內容檢查都以翻譯後的版本重新確認。
             $pending = $this->pendingEarly;
             $this->pendingEarly = null;
-            $headers = headers_sent() ? null : $this->earlyHeaders( $pending['baseline'] );
+            $headers = headers_sent() ? null : $this->earlyHeaders( $pending['baseline'], $html, $pending['settings'] );
             if ( $headers !== null && $this->earlyHtmlAllowed( $html ) ) {
                 $this->storeEarly( $pending['settings'], $html, $headers );
             } else {
