@@ -37,6 +37,7 @@ if ($core !== '') {
 
 function __($value, $domain) { return $value; }
 function _n($single, $plural, $number, $domain) { return $number === 1 ? $single : $plural; }
+function _x($text, $context, $domain) { return $text; }
 function wp_kses_uri_attributes() { return ['href','src']; }
 function esc_attr($text) { return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 function esc_url($text) { return esc_attr($text); }
@@ -444,9 +445,21 @@ check($mixed[0]['status'], 'ok', 'Valid paths are still purged when Gcore would 
 check(json_decode(end($GLOBALS['http'])[1]['body'], true), ['urls' => ['/shop/item/']], 'Only paths Gcore accepts are submitted');
 check(str_contains($mixed[0]['message'], '2 paths') && str_contains($mixed[0]['message'], 'left out'), true, 'Report how many paths were left out');
 $GLOBALS['http'] = [];
-$rejected = Providers::purge($gcoreAliases, 'urls', ['/shop/?filter=red|blue']);
+$rejected = Providers::purge($gcoreAliases, 'urls', ['/shop/red|blue/']);
 check($rejected[0]['status'], 'skipped', 'A purge made only of rejected paths is skipped, so outer layers still run');
-check(array_values(array_filter(array_column($GLOBALS['http'], 0), static fn (string $url): bool => str_ends_with($url, '/purge'))), [], 'Nothing is sent to Gcore when every path would be rejected');
+check(array_values(array_filter(array_column($GLOBALS['http'], 0), static fn (string $url): bool => str_contains($url, 'gcore.com'))), [], 'Nothing is sent to Gcore when every path would be rejected');
+// 沒有要送出的路徑就不必驗證資源：即使 Gcore 資源查詢失敗，也不擋住外層 CDN 或觸發重試。
+$GLOBALS['http_status'] = [$gcoreResource => 503];
+$GLOBALS['http'] = [];
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/red|blue/'])[0]['status'], 'skipped', 'An all-rejected purge never waits on the resource check');
+check(count($GLOBALS['http']), 0, 'No Gcore request at all for an all-rejected purge');
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/', '/shop/red|blue/'])[0]['status'], 'error', 'Accepted paths still require a verified resource');
+unset($GLOBALS['http_status']);
+// 略過說明接在結果後面，句子之間的分隔由翻譯決定（中文不留空白）。
+$GLOBALS['http'] = [];
+check(Providers::purge($gcoreAliases, 'urls', ['/shop/item/', '/shop/red|blue/'])[0]['message'],
+    'The provider accepted the purge. Gcore does not accept 1 path because it contains |, a line break, a tab or an incomplete percent escape, so it was left out.',
+    'One left-out path uses the singular note after the purge result');
 unset($GLOBALS['resource_reply']);
 
 $form = $settings;

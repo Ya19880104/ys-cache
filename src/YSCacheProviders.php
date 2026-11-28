@@ -556,6 +556,23 @@ final class YSCacheProviders
         if ($provider === 'gcore') {
             $headers = ['Authorization' => 'APIKey ' . $token];
             $resource_url = 'https://api.gcore.com/cdn/resources/' . $zone;
+            $accepted = [];
+            $note = '';
+            if ($targeted) {
+                $paths = array_values(array_unique(array_map([self::class, 'pathAndQuery'], $files)));
+                // Gcore 自 2026-11-25 起拒絕含 |、換行、Tab 或不完整 % 編碼的路徑，而且一個不合格就整批回 400；
+                // 這類路徑依瀏覽器原樣送出，改寫編碼會清到別的快取鍵，所以略過並在結果註明。
+                $accepted = array_values(array_filter($paths, [self::class, 'gcorePurgePath']));
+                $left_out = count($paths) - count($accepted);
+                $note = $left_out > 0
+                    ? sprintf(_n('Gcore does not accept %d path because it contains |, a line break, a tab or an incomplete percent escape, so it was left out.',
+                        'Gcore does not accept %d paths because they contain |, a line break, a tab or an incomplete percent escape, so they were left out.', $left_out, 'ys-cache'), $left_out)
+                    : '';
+                if ($accepted === []) {
+                    // 沒有要送出的路徑就不必驗證資源：查詢失敗也不會擋住外層 CDN 或觸發重試。
+                    return self::result($label, 'skipped', $note);
+                }
+            }
             if ($includes_alias) {
                 $resource = self::readCdnResource($label, $resource_url, $headers);
                 if ($resource['status'] === 'error') {
@@ -573,22 +590,11 @@ final class YSCacheProviders
             if (!$targeted) {
                 return self::request($label, 'POST', $endpoint, $headers, ['paths' => []], 201, $provider);
             }
-            $paths = array_values(array_unique(array_map([self::class, 'pathAndQuery'], $files)));
-            // Gcore 自 2026-11-25 起拒絕含 |、換行、Tab 或不完整 % 編碼的路徑，而且一個不合格就整批回 400；
-            // 這類路徑依瀏覽器原樣送出，改寫編碼會清到別的快取鍵，所以略過並在結果註明。
-            $accepted = array_values(array_filter($paths, [self::class, 'gcorePurgePath']));
-            $left_out = count($paths) - count($accepted);
-            $note = $left_out > 0
-                ? sprintf(_n('Gcore does not accept %d path because it contains |, a line break, a tab or an incomplete percent escape, so it was left out.',
-                    'Gcore does not accept %d paths because they contain |, a line break, a tab or an incomplete percent escape, so they were left out.', $left_out, 'ys-cache'), $left_out)
-                : '';
-            if ($accepted === []) {
-                return self::result($label, 'skipped', $note);
-            }
             $result = self::purgeBatches($label, $accepted, 100,
                 static fn (array $batch): array => self::request($label, 'POST', $endpoint, $headers, ['urls' => $batch], 201, $provider));
             if ($note !== '' && $result['status'] === 'ok') {
-                $result['message'] .= ' ' . $note;
+                /* translators: 1: the provider's purge result, 2: a note about paths that were left out. */
+                $result['message'] = sprintf(_x('%1$s %2$s', 'purge result followed by a note', 'ys-cache'), $result['message'], $note);
             }
             return $result;
         }

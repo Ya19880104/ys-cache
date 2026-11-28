@@ -871,7 +871,13 @@ msgstr "Gcore 未確認所有要求清除的路徑。"
 #, php-format
 msgid "Gcore does not accept %d path because it contains |, a line break, a tab or an incomplete percent escape, so it was left out."
 msgid_plural "Gcore does not accept %d paths because they contain |, a line break, a tab or an incomplete percent escape, so they were left out."
-msgstr[0] "Gcore 不接受 %d 個路徑（含有 |、換行、Tab 或不完整的百分比編碼），已略過這些路徑。"
+msgstr[0] "Gcore 不接受 %d 個路徑（含有 |、換行、Tab 或不完整的百分比編碼），已略過。"
+
+#. translators: 1: the provider's purge result, 2: a note about paths that were left out.
+#, php-format
+msgctxt "purge result followed by a note"
+msgid "%1$s %2$s"
+msgstr "%1$s%2$s"
 
 msgid "Exclusion guide"
 msgstr "排除規則指南"
