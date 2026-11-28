@@ -568,9 +568,6 @@ final class YSCache {
         if ( ( ! self::usesLocalHtml( $settings ) && ! self::delegatesHtml( $settings ) && ! $this->edgeHtml && ! $this->liteSpeedHtml ) || headers_sent() ) {
             return;
         }
-        if ( $this->earlySnapshot !== null ) {
-            self::dropSessionLimiter();
-        }
         if ( self::delegatesHtml( $settings ) && ! in_array( 'X-Accel-Expires: 0', headers_list(), true ) ) {
             $this->externalHold = false;
             header( 'X-Accel-Expires: 0', true );
@@ -592,24 +589,6 @@ final class YSCache {
             header( $control, true );
         }
         header( 'X-YS-Cache: BYPASS', true );
-    }
-
-    /**
-     * 先快取：PHP 的 session_start() 預設（session.cache_limiter=nocache）會送出固定的禁止快取標頭，
-     * 這是開 session 的副作用，不代表外掛要求不快取。只有三個標頭原封不動時才移除；
-     * 外掛改過任何一個（例如呼叫 nocache_headers()），就照常視為私人回應。
-     */
-    private static function dropSessionLimiter(): void {
-        $headers = headers_list();
-        $control = array_intersect( [ 'Cache-Control: no-store, no-cache, must-revalidate',
-            'Cache-Control: no-store, no-cache, must-revalidate, post-check=0, pre-check=0' ], $headers );
-        if ( ! in_array( 'Expires: Thu, 19 Nov 1981 08:52:00 GMT', $headers, true ) || ! in_array( 'Pragma: no-cache', $headers, true ) || $control === []
-            || count( array_filter( $headers, static fn ( string $header ): bool => preg_match( '~^(?:Expires|Pragma|Cache-Control):~i', $header ) === 1 ) ) !== 3 ) {
-            return;
-        }
-        foreach ( [ 'Expires', 'Cache-Control', 'Pragma' ] as $name ) {
-            header_remove( $name );
-        }
     }
 
     private function excludeLiteSpeedResponse(): void {
@@ -1012,6 +991,8 @@ final class YSCache {
 
     /** 早期快取 MISS：最終輸出時確認是完整、未個人化的公開回應，才寫入共用儲存區。 */
     private function captureEarly( array $settings ): void {
+        // 共用渲染與預載渲染相同，不帶觸發者的 Referer：WPForms 等外掛會把訪客從哪一頁來（含搜尋字串、訂單網址）印進頁面。
+        unset( $_SERVER['HTTP_REFERER'], $_REQUEST['_wp_http_referer'] );
         $baseline = $this->htmlResponseHeaders();
         $complete = true;
         ob_start( function ( string $html, int $phase ) use ( &$complete, $baseline, $settings ): string {
@@ -1042,9 +1023,14 @@ final class YSCache {
         } );
     }
 
-    /** 先快取：完整的 HTML 只要沒有某位訪客的資料就共用（表單與訪客 nonce 照常快取）。 */
+    /**
+     * 先快取：完整的 HTML 只要沒有某位訪客的資料就共用（表單與訪客 nonce 照常快取）。
+     * 頁面印出這次請求帶來的訪客身分（請求 cookie、IP、PHP session 裡的值）時不寫入。
+     */
     private function earlyHtmlAllowed( string $html ): bool {
         return self::isCompleteHtml( $html ) && YSCacheIntegrations::shareableHtml( $html ) &&
+            ! YSCacheIntegrations::printsRequestIdentity( $html, $_COOKIE, YSCachePreload::isPreloadRequest() ? [] : $_SERVER,
+                isset( $_SESSION ) && is_array( $_SESSION ) ? $_SESSION : [] ) &&
             ! self::trackingSuppressed( $html ) && apply_filters( 'ys_cache_allow_html', true, $html );
     }
 
@@ -1102,7 +1088,9 @@ final class YSCache {
         }
         $cart = WC()->cart ?? null;
         return is_object( $cart ) && is_callable( [ $cart, 'is_empty' ] ) && $cart->is_empty()
-            && preg_match( '~\bname\s*=\s*["\']?woocommerce-[a-z0-9_-]*nonce~i', $html ) !== 1;
+            && preg_match( '~\bname\s*=\s*["\']?woocommerce-[a-z0-9_-]*nonce~i', $html ) !== 1
+            // Store API 預載（例如 All Products 區塊）會把這個工作階段的 Cart-Token 印進頁面。
+            && stripos( $html, 'Cart-Token' ) === false;
     }
 
     /** 這次渲染的 YS CART 訪客身分可以共用：購物車沒有商品（以 YS CART 不會建立新身分的唯讀查詢判斷）。 */

@@ -93,9 +93,6 @@ namespace {
             if ( $hook === 'ys_cache_allow_request' ) {
                 return $GLOBALS['fixture_allow_request'] ?? $value;
             }
-            if ( $hook === 'ys_cache_ignorable_response_cookies' ) {
-                return array_merge( $value, [ 'fixture_consent' ] );
-            }
             return $value;
         }
         function do_action( string $hook, ...$args ) {
@@ -123,7 +120,14 @@ namespace {
         function wp_normalize_path( string $path ) { return str_replace( '\\', '/', $path ); }
         function wp_salt( string $scheme = 'auth' ) { return 'early-writer-fixture-' . $scheme; }
         function get_current_blog_id() { return 1; }
-        function get_queried_object() { return null; }
+        final class WP_Post {
+            public int $ID = 42;
+            public function __construct( public string $post_content ) {}
+        }
+        function get_queried_object() {
+            return $GLOBALS['path'] === '/wpforms-page/'
+                ? new WP_Post( '<!-- wp:wpforms/form-selector {"formId":"6"} /-->' . "\n" . '[wpforms id="6"]' ) : null;
+        }
         function wp_nonce_tick( $action = -1 ) { return 1234; }
         function wp_generate_uuid4() { return bin2hex( random_bytes( 16 ) ); }
         function wp_json_encode( $value ) { return json_encode( $value ); }
@@ -274,7 +278,8 @@ namespace {
                 public function is_empty(): bool { return $this->empty; }
             }
             final class FixtureWooSession {
-                public function has_session(): bool { return false; }
+                public bool $minted = false;
+                public function has_session(): bool { return $this->minted; }
             }
             function WC() {
                 static $woocommerce;
@@ -337,6 +342,26 @@ namespace {
         if ( $path === '/plugin-private/' ) {
             header( 'Cache-Control: no-cache, must-revalidate' );
         }
+        if ( in_array( $path, [ '/session-real/', '/session-token/', '/nocache-then-session/', '/session-then-private/' ], true ) ) {
+            // A plugin opens a PHP session at init or wp (a real session_start()).
+            if ( $path === '/nocache-then-session/' ) {
+                header( 'Expires: Wed, 11 Jan 1984 05:00:00 GMT' );
+                header( 'Cache-Control: no-cache, must-revalidate, max-age=0, no-store, private' );
+            }
+            session_save_path( (string) getenv( 'YS_EARLY_WRITER_ROOT' ) );
+            session_start();
+            if ( $path === '/session-token/' ) {
+                $_SESSION['csrf'] = bin2hex( random_bytes( 8 ) );
+            }
+            session_write_close();
+            if ( $path === '/session-then-private/' ) {
+                header( 'Cache-Control: private', false );
+            }
+        }
+        if ( $path === '/woo-early-session/' ) {
+            header( 'Set-Cookie: wp_woocommerce_session_fixture=t_0a1b2c%7C%7C1800000000%7C%7C1799990000%7C%7Cdef; path=/; HttpOnly', false );
+            WC()->session->minted = true;
+        }
         if ( $path === '/session-limiter/' ) {
             // PHP 的 session_start()（session.cache_limiter=nocache）在 wp 階段送出的固定標頭。
             header( 'Set-Cookie: PHPSESSID=fixture-session-limiter; path=/', false );
@@ -385,6 +410,7 @@ namespace {
             header( 'Set-Cookie: ys_ec_session=0f0e0d0c0b0a09080706050403020100; path=/; HttpOnly', false );
         }
         if ( str_starts_with( $path, '/woo-minted-' ) ) {
+            WC()->session->minted = true;
             header( 'Set-Cookie: wp_woocommerce_session_fixture=t_4d5e6f%7C%7C1800000000%7C%7C1799990000%7C%7Cabc; path=/; HttpOnly', false );
         }
         if ( $path === '/late-private/' ) {
@@ -402,8 +428,19 @@ namespace {
         } elseif ( $path === '/reflected-cookie/' ) {
             echo fixture_page( '<input type="hidden" name="visitor" value="9f8e7d6c5b4a39281706">' );
         } elseif ( $path === '/wpforms-page/' ) {
+            // WPForms prints this request's Referer into url_referer on the server.
             echo fixture_page( '<form id="wpforms-form-6" class="wpforms-validate wpforms-form" data-formid="6" method="post" data-token="53a4719a6f6b748701a53cebbac09451" data-token-time="1795843668">'
-                . '<input type="hidden" name="wpforms[id]" value="6"><input type="hidden" name="url_referer" value=""><button type="submit">送出</button></form>' );
+                . '<input type="hidden" name="wpforms[id]" value="6"><input type="hidden" name="url_referer" value="' . htmlspecialchars( (string) ( $_SERVER['HTTP_REFERER'] ?? '' ) ) . '"><button type="submit">送出</button></form>' );
+        } elseif ( $path === '/form-identity/' ) {
+            echo fixture_page( '<form class="frm-fluent-form"><input type="hidden" name="ga" value="' . htmlspecialchars( (string) ( $_COOKIE['_ga'] ?? '' ) ) . '"></form>' );
+        } elseif ( $path === '/form-ip/' ) {
+            echo fixture_page( '<form class="wpforms-form"><input type="hidden" name="ip" value="' . htmlspecialchars( (string) ( $_SERVER['HTTP_CF_CONNECTING_IP'] ?? '' ) ) . '"></form>' );
+        } elseif ( $path === '/session-token/' ) {
+            echo fixture_page( '<form><input type="hidden" name="csrf" value="' . ( $_SESSION['csrf'] ?? '' ) . '"></form>' );
+        } elseif ( $path === '/woo-minted-cart-token/' ) {
+            echo fixture_page( '<script>wp.apiFetch.use( wp.apiFetch.createPreloadingMiddleware( JSON.parse( decodeURIComponent( "%7B%22%2Fwc%2Fstore%2Fv1%2Fcart%22%3A%7B%22headers%22%3A%7B%22Cart-Token%22%3A%22eyJ0eXAiOiJKV1Qi.e30.sig%22%7D%7D%7D" ) ) ) );</script>' );
+        } elseif ( $path === '/jfb-csrf/' ) {
+            echo fixture_page( '<form class="jet-form-builder"><input type="hidden" name="_jet_engine_booking_form_id" value="9"><input type="hidden" name="_jfb_csrf_token" value="7c1e5a9b"></form>' );
         } elseif ( $path === '/woo-minted-nonce/' ) {
             echo fixture_page( '<form class="woocommerce-form-login"><input type="hidden" name="woocommerce-login-nonce" value="a1b2c3d4e5"></form>' );
         } else {
@@ -484,37 +521,8 @@ namespace {
         expect_same( true, Integrations::pixelYourSiteVisitorData( $page ), 'Detect ' . $label );
     }
 
-    // Set-Cookie：只允許可略過的名稱與刪除 cookie 的標頭。
     $now = 1800000000;
     $base = [ 'Content-Type: text/html; charset=UTF-8', 'X-Frame-Options: SAMEORIGIN' ];
-    $without = static fn ( array $headers, array $names = Integrations::IGNORABLE_RESPONSE_COOKIES ): ?array =>
-        Integrations::withoutIgnorableCookies( $headers, $names, $now );
-    expect_same( $base, $without( $base ), 'Headers without cookies stay unchanged' );
-    foreach ( [
-        'Set-Cookie: woocommerce_recently_viewed=12%7C13; path=/; secure; HttpOnly',
-        'set-cookie: productlist=12; path=/',
-        'Set-Cookie: select_prod_list=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=0; path=/',
-        'Set-Cookie: banner_state=deleted; expires=Thu, 01-Jan-1970 00:00:01 GMT; Max-Age=0; path=/',
-        'Set-Cookie: banner_state=1; expires=Thu, 01 Jan 2026 00:00:00 GMT; path=/',
-        'Set-Cookie: banner_state=1; Max-Age=0',
-        'Set-Cookie: banner_state=1; max-age=-5',
-    ] as $cookie ) {
-        expect_same( $base, $without( [ $base[0], $cookie, $base[1] ] ), 'Drop ignorable cookie header: ' . $cookie );
-    }
-    foreach ( [
-        'Set-Cookie: PHPSESSID=abc; path=/; HttpOnly',
-        'Set-Cookie: wp_woocommerce_session_abc=1; expires=Fri, 01 Jan 2038 00:00:00 GMT; path=/',
-        'Set-Cookie: banner_state=1; expires=Thu, 01 Jan 1970 00:00:01 GMT; Max-Age=3600',
-        'Set-Cookie: banner_state=1; Max-Age=soon',
-        'Set-Cookie: banner_state=1; expires=someday',
-        'Set-Cookie: =anonymous',
-        'Set-Cookie: no-value',
-    ] as $cookie ) {
-        expect_same( null, $without( [ $base[0], $cookie ] ), 'Refuse cookie header: ' . $cookie );
-    }
-    expect_same( [], $without( [ 'Set-Cookie: fixture_consent=1; path=/' ], [ 'fixture_consent' ] ), 'Filter-added names are ignorable' );
-    expect_same( null, $without( [ 'Set-Cookie: woocommerce_recently_viewed=1' ], [ 'fixture_consent' ] ), 'Only the given names are ignorable' );
-    expect_same( null, $without( [ 'Content-Type: text/html', 42 ] ), 'Reject malformed header lists' );
 
     // 先快取：回應 cookie 一律不存入共用副本，只有代表這次渲染已個人化的 cookie 才讓回應不寫入。
     $state = [ 'wordpress_logged_in_', 'woocommerce_items_in_cart', 'fixture_private_' ];
@@ -542,6 +550,25 @@ namespace {
     expect_same( true, Integrations::shareableHtml( fixture_page( '<template id="ct-account-modal-template"><form id="loginform"><input type="hidden" name="woocommerce-login-nonce" value="a1b2c3"></form></template>' ) ), 'A login modal with guest nonces is shared' );
     expect_same( false, Integrations::shareableHtml( fixture_page( '<script>var ysEc = {"guestToken":"abc123"};</script>' ) ), 'A YS CART guest token belongs to one visitor' );
     expect_same( false, Integrations::shareableHtml( fixture_page( pixel_markup( pixel_options( [ 'user_id' => '17' ] ) ) ) ), 'PixelYourSite customer data belongs to one visitor' );
+    $jetForm = '<form class="jet-form-builder"><input type="hidden" name="_jet_engine_booking_form_id" value="9"><input type="hidden" name="_wpnonce" value="a1b2c3">';
+    expect_same( true, Integrations::shareableHtml( fixture_page( $jetForm . '</form>' ) ), 'A JetFormBuilder form without CSRF protection is shared' );
+    expect_same( false, Integrations::shareableHtml( fixture_page( $jetForm . '<input type="hidden" name="_jfb_csrf_token" value="7c1e"></form>' ) ), 'A JetFormBuilder CSRF token is bound to the visitor who loaded the page' );
+
+    // 頁面印出這次請求帶來的訪客身分（分析 cookie、IP、PHP session 裡的值）時不共用，例如表單的智慧標籤。
+    $identity = static fn ( string $body, array $cookies = [], array $server = [], array $session = [] ): bool =>
+        Integrations::printsRequestIdentity( fixture_page( $body ), $cookies, $server, $session );
+    $ga = [ '_ga' => 'GA1.1.111111111.1700000000' ];
+    expect_same( true, $identity( '<input type="hidden" name="ga" value="GA1.1.111111111.1700000000">', $ga ), 'An analytics cookie printed by a form is that visitor\'s identity' );
+    expect_same( false, $identity( '<p>No visitor values</p>', $ga ), 'Analytics cookies that are not printed do not matter' );
+    expect_same( false, $identity( '<script>var external_id = "0123456789abcdef0123";</script>', [ 'pbid' => '0123456789abcdef0123' ] ), 'PixelYourSite swaps its browser id on the client, so it is not a shared identity' );
+    expect_same( true, $identity( '<p>fb.1.1700&amp;click=x1y2z3</p>', [ '_fbc' => 'fb.1.1700&click=x1y2z3' ] ), 'Escaped cookie values are matched too' );
+    expect_same( true, $identity( '<input type="hidden" name="ip" value="198.51.100.23">', [], [ 'HTTP_CF_CONNECTING_IP' => '198.51.100.23' ] ), 'A client IP printed in the page is that visitor\'s identity' );
+    expect_same( true, $identity( '<script>var visitor = {"ip":"198.51.100.23"};</script>', [], [ 'HTTP_X_FORWARDED_FOR' => '198.51.100.23, 10.0.0.1' ] ), 'The first forwarded address counts' );
+    expect_same( false, $identity( '<p>Release 198.51.100.230 notes</p>', [], [ 'REMOTE_ADDR' => '198.51.100.23' ] ), 'An address inside other text is not a match' );
+    expect_same( false, $identity( '<input value="127.0.0.1">', [], [ 'REMOTE_ADDR' => '127.0.0.1' ] ), 'A loopback proxy address is not a visitor identity' );
+    expect_same( true, $identity( '<input type="hidden" name="csrf" value="a8f3c2e9d1b7465f">', [], [], [ 'plugin' => [ 'csrf' => 'a8f3c2e9d1b7465f' ] ] ), 'A token kept in the PHP session and printed in the page belongs to one visitor' );
+    expect_same( false, $identity( '<a href="https://store.example.test/landing/">Landing</a>', [], [], [ 'landing' => 'https://store.example.test/landing/' ] ), 'Session URLs are page addresses, not identities' );
+    expect_same( false, $identity( '<p>Shared page</p>', [], [], [ 'csrf' => 'a8f3c2e9d1b7465f' ] ), 'Session values that are not printed do not matter' );
 
     echo "Early writer guard checks passed.\n";
 
@@ -685,29 +712,48 @@ namespace {
         $sessionHit = $fetch( '/session-cookie/' );
         expect_same( 'HIT', $header( $sessionHit, 'x-ys-cache' ), 'Later visitors get the shared page' );
         expect_same( '', $header( $sessionHit, 'set-cookie' ), 'The shared copy never hands out the session cookie' );
+        // 要寫入的渲染不帶觸發者的 Referer（與預載相同）：WPForms 的 url_referer 在共用副本中是空的，頁面照常快取。
+        $formReferer = $fetch( '/wpforms-page/', [ 'Referer: https://store.example.test/?s=private-search-term' ] );
+        expect_same( 'MISS', $header( $formReferer, 'x-ys-cache' ), 'A page with a WPForms form, also in its post content, renders as a candidate' );
+        $formEntry = $stored( '/wpforms-page/' );
+        expect_same( true, is_array( $formEntry ) && str_contains( $formEntry['html'], 'name="url_referer" value=""' ) && ! str_contains( $formEntry['html'], 'private-search-term' ),
+            'The shared copy carries no Referer from the visitor who triggered the render' );
+        $formHit = $fetch( '/wpforms-page/' );
+        expect_same( [ 'HIT', false ], [ $header( $formHit, 'x-ys-cache' ), str_contains( $formHit['body'], 'private-search-term' ) ], 'Later visitors never see that Referer' );
         foreach ( [
-            '/wpforms-page/' => 'A page with a WPForms form',
             '/ys-cart-session/' => 'A YS CART session minted with an empty cart',
             '/woo-minted-session/' => 'A WooCommerce session minted with an empty cart',
+            '/woo-early-session/' => 'A WooCommerce session minted before the template with an empty cart',
+            '/session-real/' => 'A page whose plugin really opens a PHP session',
         ] as $path => $label ) {
-            expect_same( 'MISS', $header( $fetch( $path ), 'x-ys-cache' ), $label . ' renders as a candidate' );
+            $first = $fetch( $path );
+            expect_same( 'MISS', $header( $first, 'x-ys-cache' ), $label . ' renders as a candidate' );
+            expect_same( '', $header( $first, 'pragma' ) . $header( $first, 'expires' ), $label . ' sends no session cache-limiter headers' );
             expect_same( true, is_array( $stored( $path ) ), $label . ' is cached' );
-            expect_same( 'HIT', $header( $fetch( $path ), 'x-ys-cache' ), $label . ' is served early' );
+            $again = $fetch( $path );
+            expect_same( [ 'HIT', '' ], [ $header( $again, 'x-ys-cache' ), $header( $again, 'set-cookie' ) ], $label . ' is served early without a cookie' );
         }
-        // session_start() 自動送出的禁止快取標頭只是 session 的副作用，不是外掛要求不快取。
-        $limiter = $fetch( '/session-limiter/' );
-        expect_same( 'MISS', $header( $limiter, 'x-ys-cache' ), 'PHP session cache limiter headers do not make the page private' );
-        expect_same( '', $header( $limiter, 'pragma' ) . $header( $limiter, 'expires' ), 'The limiter headers are dropped from the candidate response' );
-        expect_same( true, is_array( $stored( '/session-limiter/' ) ), 'A page with a PHP session started before rendering is cached' );
-        $limiterHit = $fetch( '/session-limiter/' );
-        expect_same( [ 'HIT', '' ], [ $header( $limiterHit, 'x-ys-cache' ), $header( $limiterHit, 'set-cookie' ) ], 'Later visitors get the page without the session cookie' );
-        $bypassed( $fetch( '/wordpress-nocache/' ), 'A plugin calling nocache_headers()' );
-        expect_same( null, $stored( '/wordpress-nocache/' ), 'WordPress nocache headers still prevent the write' );
+
+        // 請求帶來的訪客身分印在頁面上時不寫入；沒有這些值的渲染（無 cookie 的訪客或預載）照常寫入。
+        $bypassed( $fetch( '/form-identity/', [ 'Cookie: _ga=GA1.1.111111111.1700000000' ] ), 'A form that prints the visitor\'s analytics cookie' );
+        expect_same( null, $stored( '/form-identity/' ), 'A render with a printed analytics cookie is not stored' );
+        expect_same( 'MISS', $header( $fetch( '/form-identity/' ), 'x-ys-cache' ), 'A cookieless render of the same page is a candidate' );
+        expect_same( true, is_array( $stored( '/form-identity/' ) ), 'The cookieless render of that page is stored' );
+        $bypassed( $fetch( '/form-ip/', [ 'CF-Connecting-IP: 198.51.100.23' ] ), 'A form that prints the visitor\'s IP address' );
+        expect_same( null, $stored( '/form-ip/' ), 'A render with a printed client IP is not stored' );
+        // 讀取端先關掉 session 的快取限制器，看到的禁止快取標頭一定是外掛自己送的，不論與 session_start() 的先後。
         foreach ( [
             '/reflected-cookie/' => 'A page that prints the new cookie value',
             '/state-cookie/' => 'A render that fills the cart',
             '/ys-cart-session-items/' => 'A YS CART session that already has items',
             '/woo-minted-nonce/' => 'A WooCommerce nonce bound to the new session',
+            '/woo-minted-cart-token/' => 'A Store API Cart-Token for the new WooCommerce session',
+            '/session-token/' => 'A token kept in the PHP session and printed in the page',
+            '/jfb-csrf/' => 'A JetFormBuilder CSRF token bound to the rendering visitor',
+            '/wordpress-nocache/' => 'A plugin calling nocache_headers()',
+            '/nocache-then-session/' => 'nocache_headers() followed by a plugin opening a session',
+            '/session-then-private/' => 'A private header sent after a plugin opened a session',
+            '/session-limiter/' => 'A plugin that sends the session no-cache headers itself',
         ] as $path => $label ) {
             $bypassed( $fetch( $path ), $label );
             expect_same( null, $stored( $path ), $label . ' is not stored' );

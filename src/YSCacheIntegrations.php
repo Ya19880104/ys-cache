@@ -8,8 +8,6 @@ defined( 'ABSPATH' ) || exit;
 final class YSCacheIntegrations {
 
 	public const YS_CART_PAGES = [ 'cart', 'checkout', 'thankyou', 'dashboard', 'login', 'register', 'order_lookup', 'coupon_center' ];
-	/** 不影響頁面內容的回應 cookie：命中時本來就不會送出，寫入共用快取時可以略過。 */
-	public const IGNORABLE_RESPONSE_COOKIES = [ 'woocommerce_recently_viewed', 'select_prod_list', 'productlist' ];
 	/** Meta 進階比對會帶入的個人資料欄位。 */
 	/** 真正的個人資料欄位。external_id 是 PixelYourSite 以 cookie 產生的識別碼，瀏覽器端會換成訪客自己的值，不在此列。 */
 	private const PERSONAL_MATCHING_KEYS = [ 'em', 'ph', 'fn', 'ln', 'ct', 'st', 'zp', 'db', 'ge', 'country' ];
@@ -552,52 +550,6 @@ final class YSCacheIntegrations {
 	}
 
 	/**
-	 * 去掉可略過的 Set-Cookie 後的回應標頭；仍有其他 Set-Cookie 時回傳 null（不能寫入共用快取）。
-	 *
-	 * 可略過：$names 列出的名稱，以及刪除 cookie 的標頭（Max-Age 小於等於 0，或沒有 Max-Age 且 Expires 已過）。
-	 */
-	public static function withoutIgnorableCookies( array $headers, array $names = self::IGNORABLE_RESPONSE_COOKIES, ?int $now = null ): ?array {
-		$now ??= time();
-		$kept = [];
-		foreach ( $headers as $header ) {
-			if ( ! is_string( $header ) ) {
-				return null;
-			}
-			if ( ! preg_match( '~\ASet-Cookie\s*:(.*)\z~is', $header, $cookie ) ) {
-				$kept[] = $header;
-				continue;
-			}
-			$attributes = explode( ';', $cookie[1] );
-			$pair = explode( '=', (string) array_shift( $attributes ), 2 );
-			$name = trim( $pair[0] );
-			if ( count( $pair ) !== 2 || $name === '' ) {
-				return null;
-			}
-			if ( in_array( $name, $names, true ) ) {
-				continue;
-			}
-			$maxAge = null;
-			$expires = null;
-			foreach ( $attributes as $attribute ) {
-				[ $key, $value ] = array_pad( explode( '=', $attribute, 2 ), 2, '' );
-				$key = strtolower( trim( $key ) );
-				if ( $key === 'max-age' ) {
-					$maxAge = trim( $value );
-				} elseif ( $key === 'expires' ) {
-					$expires = trim( $value );
-				}
-			}
-			$deleted = $maxAge !== null
-				? preg_match( '~\A-?[0-9]{1,12}\z~', $maxAge ) === 1 && (int) $maxAge <= 0
-				: $expires !== null && ( $time = strtotime( $expires ) ) !== false && $time < $now;
-			if ( ! $deleted ) {
-				return null;
-			}
-		}
-		return $kept;
-	}
-
-	/**
 	 * 先快取的回應標頭規則（提前快取寫入端）。
 	 *
 	 * Set-Cookie 一律不存入共用副本：觸發渲染的訪客照常收到，之後的訪客拿到的副本不帶任何 cookie。
@@ -670,7 +622,79 @@ final class YSCacheIntegrations {
 	 * 而提前快取的壽命上限是 nonce 有效期的一半，送出時仍然有效。WPForms 的防垃圾權杖依時間產生，也是共用的。
 	 */
 	public static function shareableHtml( string $html ): bool {
-		return ! self::pixelYourSiteVisitorData( $html ) && preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) !== 1;
+		return ! self::pixelYourSiteVisitorData( $html ) && preg_match( '/"guestToken"\s*:\s*"[^"]+/i', $html ) !== 1
+			// JetFormBuilder「Enable csrf protection」：權杖綁定渲染者的 User-Agent、IP 與表單，別的訪客送出會被判為 csrf_failed。
+			&& preg_match( '~<input\b[^>]*\bname\s*=\s*["\']?_jfb_csrf_token\b~i', $html ) !== 1;
+	}
+
+	/** PixelYourSite 的瀏覽器識別碼與造訪資料 cookie：瀏覽器端會換成訪客自己的值，或本來就是頁面網址與來源網域。 */
+	private const NON_IDENTITY_REQUEST_COOKIES = [ 'pbid', 'pys_', 'last_pys', 'pysTrafficSource', 'last_pysTrafficSource' ];
+	/** 外掛判斷訪客 IP 時會讀的標頭（WPForms、Fluent Forms 等）。 */
+	private const CLIENT_IP_HEADERS = [
+		'REMOTE_ADDR', 'HTTP_CF_CONNECTING_IP', 'HTTP_TRUE_CLIENT_IP', 'HTTP_X_REAL_IP', 'HTTP_CLIENT_IP',
+		'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED', 'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR',
+	];
+
+	/**
+	 * 頁面印出了這次請求帶來的訪客身分：請求 cookie 的值（例如表單智慧標籤 {cookie._ga}）、訪客 IP（{user_ip}、{ip}），
+	 * 或 PHP session 裡的值（例如存在 session 的 CSRF 權杖）。這樣的渲染不能共用；
+	 * 同一頁仍會由沒有這些值的渲染（無 cookie 的訪客或預載）寫入快取。
+	 *
+	 * @param array $server 這次請求的 $_SERVER；預載請求傳空陣列（IP 是伺服器自己的）。
+	 */
+	public static function printsRequestIdentity( string $html, array $cookies, array $server, array $session ): bool {
+		foreach ( $cookies as $name => $value ) {
+			if ( ! is_string( $value ) || self::startsWithAny( (string) $name, self::NON_IDENTITY_REQUEST_COOKIES ) ) {
+				continue;
+			}
+			if ( self::printsValue( $html, $value ) || self::printsValue( $html, rawurldecode( $value ) ) ) {
+				return true;
+			}
+		}
+		foreach ( self::CLIENT_IP_HEADERS as $key ) {
+			foreach ( explode( ',', is_string( $server[ $key ] ?? null ) ? $server[ $key ] : '' ) as $ip ) {
+				$ip = trim( $ip );
+				if ( filter_var( $ip, FILTER_VALIDATE_IP ) === false || str_starts_with( $ip, '127.' ) || $ip === '::1' ) {
+					continue;
+				}
+				// 印成屬性值或 JSON 字串的 IP；夾在其他文字裡的數字不算。
+				if ( preg_match( '~(["\'])\s*' . preg_quote( $ip, '~' ) . '\s*\1~', $html ) === 1 ) {
+					return true;
+				}
+			}
+		}
+		$printed = false;
+		array_walk_recursive( $session, static function ( $value ) use ( $html, &$printed ): void {
+			if ( ! $printed && is_scalar( $value ) && ! is_bool( $value ) ) {
+				$value = (string) $value;
+				// 網址與路徑是頁面位址（例如到達頁），不是訪客身分。
+				$printed = ! str_contains( $value, '://' ) && ! str_starts_with( $value, '/' ) && self::printsValue( $html, $value );
+			}
+		} );
+		return $printed;
+	}
+
+	/** 值（12 個字元以上）原樣、HTML 跳脫或 JSON 跳脫後出現在 HTML 裡；較短的值太常見，不視為訪客身分。 */
+	private static function printsValue( string $html, string $value ): bool {
+		if ( strlen( $value ) < 12 ) {
+			return false;
+		}
+		$json = substr( (string) json_encode( $value ), 1, -1 );
+		foreach ( array_unique( [ $value, htmlspecialchars( $value, ENT_QUOTES, 'UTF-8' ), $json ] ) as $form ) {
+			if ( $form !== '' && str_contains( $html, $form ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static function startsWithAny( string $name, array $prefixes ): bool {
+		foreach ( $prefixes as $prefix ) {
+			if ( str_starts_with( $name, $prefix ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public static function cacheableHtml( string $html, bool $localContactForm = false ): bool {

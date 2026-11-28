@@ -21,8 +21,19 @@ return static function ( $config = null ): void {
     if ( ! is_array( $config ) || ! isset( $config['host'], $config['directory'] ) ) {
         return;
     }
-    if ( PHP_SAPI === 'cli' || ( defined( 'WP_CLI' ) && WP_CLI ) || headers_sent() ||
-        array_key_exists( YSCacheEarlyRequest::PRELOAD_HEADER, $_SERVER ) ) {
+    if ( PHP_SAPI === 'cli' || ( defined( 'WP_CLI' ) && WP_CLI ) || headers_sent() ) {
+        return;
+    }
+    // 交給 WordPress 渲染、可能寫入共用快取的請求：之後開啟的 PHP session 不送 session.cache_limiter 的禁止快取標頭，
+    // 寫入端看到的 Cache-Control、Expires、Pragma 就一定是外掛自己送的（不論與 session_start() 的先後）。
+    // 觸發渲染的訪客照樣收到 YS CACHE 自己的 private 標頭。
+    $quietSession = static function (): void {
+        if ( function_exists( 'session_status' ) && session_status() === PHP_SESSION_NONE && ! headers_sent() ) {
+            session_cache_limiter( '' );
+        }
+    };
+    if ( array_key_exists( YSCacheEarlyRequest::PRELOAD_HEADER, $_SERVER ) ) {
+        $quietSession();
         return;
     }
     if ( ( defined( 'WP_ADMIN' ) && WP_ADMIN ) || ( defined( 'DOING_AJAX' ) && DOING_AJAX ) ||
@@ -45,6 +56,7 @@ return static function ( $config = null ): void {
     }
     $entry = YSCacheEarlyStore::read( (string) ( $config['directory'] ?? '' ), (string) $config['host'], $request['path'], $request['variant'] );
     if ( $entry === null ) {
+        $quietSession();
         header( 'X-YS-Cache-Early: miss' );
         return;
     }
@@ -53,6 +65,7 @@ return static function ( $config = null ): void {
     $policy = (string) ( $config['policy_file'] ?? '' );
     $digest = $policy !== '' && is_file( $policy ) ? (string) @hash_file( 'sha256', $policy ) : '';
     if ( $digest !== $entry['policy'] ) {
+        $quietSession();
         header( 'X-YS-Cache-Early: policy' );
         return;
     }
@@ -67,6 +80,7 @@ return static function ( $config = null ): void {
         if ( ! $gzip ) {
             $body = @gzdecode( $body );
             if ( ! is_string( $body ) || $body === '' ) {
+                $quietSession();
                 header( 'X-YS-Cache-Early: miss' );
                 return;
             }
